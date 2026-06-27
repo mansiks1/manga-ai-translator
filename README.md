@@ -20,8 +20,13 @@ A web platform for searching manga across multiple websites and translating chap
 
 manga_translator_ai/
 │
+
 ├── index.html
+
 ├── style.css
+
 ├── script.js
+
 ├── README.md
+
 └── assets/
