@@ -17,16 +17,24 @@ A web platform for searching manga across multiple websites and translating chap
 - FastAPI
 - AI API
 
+manga_translation_using_ai/
 
-manga_translator_ai/
 │
 
-├── index.html
+├── frontend/
 
-├── style.css
+│   ├── index.html
 
-├── script.js
+│   ├── style.css
 
-├── README.md
+│   └── script.js
 
-└── assets/
+│
+
+├── backend/
+
+│
+
+├── .gitignore
+
+└── README.md
