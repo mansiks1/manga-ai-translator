@@ -1,0 +1,15 @@
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    text-align: center;
+    margin-top: 100px;
+    margin: 0;
+}
+
+#searchInput {
+    width: 300px;
+    padding: 10px;
+}
+
+#searchButton {
+    padding: 10px 20px;
+}
