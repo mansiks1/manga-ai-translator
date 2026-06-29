@@ -38,3 +38,5 @@ manga_translation_using_ai/
 ├── .gitignore
 
 └── README.md
+
+Нужно сделать обычный и глубокий поиск. Разобраться с backend и потом приступать к глубокому поиску.

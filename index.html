@@ -1,19 +1,20 @@
-
 <!DOCTYPE html>
 <html lang="ru">
+
 <head>
     <meta charset="UTF-8">
     <title>Manga Search AI</title>
     <!-- Подключение стилей -->
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <!-- Главный контейнер, чтобы все центрировать -->
     <div id="container">
         <!-- Логотип, но пока просто текст -->
         <h1>Manga Search AI</h1>
         <!-- объединяем input и button для применения flex раскладки -->
-        
+
         <!-- 
         БЛОК ПОИСКА
          -->
@@ -21,8 +22,16 @@
             <input type="text" id="searchInput" placeholder="Введите название манги">
             <button id="searchButton">Найти</button>
         </div>
-    
+
+        <!-- блок результата, изначально скрыт. Не знаю, стоит ли добавлять class, если уже есть id -->
+        <div id="results" class="results" style="display: none;">
+            <h2 id="searchStatus"></h2>
+            <!-- контейнер для карточек манги, с помощью js добавим карточки -->
+            <div id="resultslist" class="resultslist"></div>
+
+        </div>
     </div>
     <script src="script.js"></script>
 </body>
+
 </html>
