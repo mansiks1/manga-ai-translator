@@ -10,25 +10,25 @@ async function searchManga() {
 
     //setSearchStatus(query) должна показывать пользователю, что именно он ищет.
     setSearchStatus(`Идет поиск для: "${query}"`);
-    
+
     //далее будет запрос к API
     //const mangas = await fetchMangaSearch(query);
 
     //ТЕСТОВЫЕ ДАННЫЕ, ПОКА НЕ РЕАЛИЗОВАН fetchMangaSearch
     const mangas = testMangas.filter(manga =>
-    manga.title.toLowerCase().includes(query.toLowerCase())
+        manga.title.toLowerCase().includes(query.toLowerCase())
     );
 
-    
+
     //Сортируем найденные манги по языку, количеству глав и т.д. и выбираем лучший вариант.
     const sortedMangas = sortMangasByRelevance(mangas, query);
 
     //Надо сортировать у каждой манги источники по языку, количеству глав и т.д. и выбрать лучший источник.
     //prepareMangaResults(mangas,preferredLanguage) //сортирует по языку, количеству глав и т.д.;
-    
+
     renderSearchResults(sortedMangas, query); //Показывает список найденной манги.
 }
-                //ВСТАВИТЬ ТЕКСТ В renderSearchResults после того как сделаю
+//ВСТАВИТЬ ТЕКСТ В renderSearchResults после того как сделаю
 //Добавить setSearchStatus(). нужно, чтобы показать состояние загрузки, пока идет запрос к API.
 //setSearchStatus(`Результаты поиска для: "${query}"`);
 
@@ -103,7 +103,7 @@ function prepareMangaResults(mangas, preferredLanguage) {
             bestSource: getBestSource(sources, preferredLanguage)
         };
     });
-}  
+}
 
 //Тестовая выборка для проверки отрисовки карточек
 const testMangas = [
@@ -125,7 +125,7 @@ const testMangas = [
     },
     {
         id: 3,
-        title:'One Piece: Romance Dawn',
+        title: 'One Piece: Romance Dawn',
         description: 'Предыстория One Piece, рассказывающая о ранних приключениях Луффи.',
         coverUrl: '',
         originalUrl: 'https://mangaplus.shueisha.co.jp/titles/100020',
@@ -145,7 +145,7 @@ function createMangaCard(manga) {
 
     const chapters = document.createElement('p');
     chapters.textContent = `Глав: ${manga.chaptersCount}`;
-    
+
     //Можно добавить, если у меня будет встроенный ридер, но пока что не нужно.
     //Тогда "Читать" может открывать “лучший доступный вариант” автоматически
     // const readButton = document.createElement('button');
@@ -153,7 +153,7 @@ function createMangaCard(manga) {
     // readButton.addEventListener('click', () => {
     //     console.log('Открыть чтение:', manga);
     // });
-    
+
     const translateButton = document.createElement('button');
     translateButton.textContent = 'ИИ-перевод';
     translateButton.addEventListener('click', () => {
@@ -172,7 +172,7 @@ function createMangaCard(manga) {
 }
 
 //функция для отрисовки результатов поиска(показывает отрисованные карточки)
-function renderSearchResults(mangas,query) {
+function renderSearchResults(mangas, query) {
     const results = document.getElementById('results');
     const searchStatus = document.getElementById('searchStatus');
     const resultsList = document.getElementById('resultslist');
@@ -189,7 +189,7 @@ function renderSearchResults(mangas,query) {
     mangas.forEach(manga => {
         const card = createMangaCard(manga);
         resultsList.appendChild(card);
-    }); 
+    });
 }
 //нажатие на кнопку поиска, сначала мышкой, потом Enter
 searchButton.addEventListener('click', searchManga);
