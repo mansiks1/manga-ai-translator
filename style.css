@@ -1,15 +1,118 @@
-body {
+﻿body {
     font-family: 'Segoe UI', Arial, sans-serif;
-    text-align: center;
-    margin-top: 100px;
     margin: 0;
+    background: #f6f7f9;
+    color: #1f2933;
+}
+
+#container {
+    width: min(980px, calc(100% - 32px));
+    margin: 56px auto;
+    text-align: center;
+}
+
+#searchbox {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 28px;
 }
 
 #searchInput {
-    width: 300px;
-    padding: 10px;
+    width: min(420px, 100%);
+    padding: 10px 12px;
+    border: 1px solid #c8d0d9;
+    border-radius: 6px;
+    font-size: 16px;
 }
 
-#searchButton {
-    padding: 10px 20px;
+#searchButton,
+.manga-actions button {
+    padding: 10px 16px;
+    border: 0;
+    border-radius: 6px;
+    background: #1f6feb;
+    color: white;
+    cursor: pointer;
+    font-size: 15px;
+}
+
+#searchButton:hover,
+.manga-actions button:hover {
+    background: #185abc;
+}
+
+.manga-actions button:disabled {
+    background: #9aa6b2;
+    cursor: not-allowed;
+}
+
+.results {
+    text-align: left;
+}
+
+#searchStatus {
+    text-align: center;
+    font-size: 22px;
+    margin-bottom: 18px;
+}
+
+.resultslist {
+    display: grid;
+    gap: 14px;
+}
+
+.manga-card {
+    display: grid;
+    grid-template-columns: 112px 1fr;
+    gap: 16px;
+    padding: 14px;
+    border: 1px solid #d8dee6;
+    border-radius: 8px;
+    background: white;
+}
+
+.manga-cover {
+    width: 112px;
+    height: 160px;
+    object-fit: cover;
+    border-radius: 6px;
+    background: #e5e7eb;
+}
+
+.manga-card-content h3 {
+    margin: 0 0 8px;
+}
+
+.manga-meta {
+    margin: 0 0 10px;
+    color: #52606d;
+    font-size: 14px;
+}
+
+.manga-description {
+    margin: 0 0 14px;
+    line-height: 1.45;
+}
+
+.manga-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 560px) {
+    #searchbox {
+        flex-direction: column;
+    }
+
+    .manga-card {
+        grid-template-columns: 1fr;
+    }
+
+    .manga-cover {
+        width: 100%;
+        height: auto;
+        max-height: 360px;
+    }
 }

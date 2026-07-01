@@ -1,39 +1,45 @@
-const searchButton = document.getElementById('searchButton');
+﻿const searchButton = document.getElementById('searchButton');
 const searchInput = document.getElementById('searchInput');
 
-//ПОИСК МАНГИ(обработка нажатия кнопки и нажатия Enter будет после всех функций)
+// Предпочтительный язык пользователя. Позже можно вынести в настройки.
+const preferredLanguage = 'ru';
+
+// ПОИСК МАНГИ
+// Обрабатывает кнопку "Найти" и Enter: берет текст из поля, отправляет запрос на backend
+// и передает найденную мангу в функцию отрисовки карточек.
 async function searchManga() {
-
-    // возьмем значение из поля ввода и удалим пробелы в начале и конце
     const query = searchInput.value.trim();
-    if (query == "") return; // если поле пустое, ничего не делаем
+    if (query === '') return;
 
-    //setSearchStatus(query) должна показывать пользователю, что именно он ищет.
+    // Показываем пользователю, что поиск начался, и очищаем старые карточки.
     setSearchStatus(`Идет поиск для: "${query}"`);
+    clearSearchResults();
 
-    //далее будет запрос к API
-    //const mangas = await fetchMangaSearch(query);
-
-    //ТЕСТОВЫЕ ДАННЫЕ, ПОКА НЕ РЕАЛИЗОВАН fetchMangaSearch
-    const mangas = testMangas.filter(manga =>
-        manga.title.toLowerCase().includes(query.toLowerCase())
-    );
-
-
-    //Сортируем найденные манги по языку, количеству глав и т.д. и выбираем лучший вариант.
-    const sortedMangas = sortMangasByRelevance(mangas, query);
-
-    //Надо сортировать у каждой манги источники по языку, количеству глав и т.д. и выбрать лучший источник.
-    //prepareMangaResults(mangas,preferredLanguage) //сортирует по языку, количеству глав и т.д.;
-
-    renderSearchResults(sortedMangas, query); //Показывает список найденной манги.
+    try {
+        const mangas = await fetchMangaSearch(query);
+        renderSearchResults(mangas, query);
+    } catch (error) {
+        console.error(error);
+        setSearchStatus('Ошибка при поиске');
+        showSearchMessage('Не получилось получить данные. Проверь, запущен ли backend.');
+    }
 }
-//ВСТАВИТЬ ТЕКСТ В renderSearchResults после того как сделаю
-//Добавить setSearchStatus(). нужно, чтобы показать состояние загрузки, пока идет запрос к API.
-//setSearchStatus(`Результаты поиска для: "${query}"`);
 
+// Запрос к нашему backend.
+// Frontend не ходит напрямую в MangaDex/AniList/Jikan/Kitsu, этим занимается server.js.
+async function fetchMangaSearch(query) {
+    const url = `/api/search?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(preferredLanguage)}`;
+    const response = await fetch(url);
 
-//Функция для отображения состояния поиска (например, "Идет поиск...")
+    if (!response.ok) {
+        throw new Error(`Search request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.results || [];
+}
+
+// Общая функция для статуса поиска: "Идет поиск", "Результаты поиска", "Ошибка".
 function setSearchStatus(text) {
     const results = document.getElementById('results');
     const searchStatus = document.getElementById('searchStatus');
@@ -42,143 +48,23 @@ function setSearchStatus(text) {
     searchStatus.textContent = text;
 }
 
-//нужно реализовать:
-// searchManga()          // управляет порядком действий
-// fetchMangaSearch()     // получает данные
-// renderSearchResults()  // рисует результаты
-// createMangaCard()      // создает одну карточку
-// deepSearchManga()          // глубокий поиск
-// fetchDeepMangaData()       // обращение к backend/ИИ-поиску
-// renderDeepSearchResult()   // расширенная карточка с главами/языками
-
-// async function fetchMangaSearch(query) {
-
-// }
-
-//Сортирует найденные манги по релевантности (сначала точное совпадение, потом совпадение в начале, потом совпадение в середине)
-function sortMangasByRelevance(mangas, query) {
-    const normalizedQuery = query.toLowerCase();
-
-    return mangas.slice().sort((a, b) => {
-        const aTitle = a.title.toLowerCase();
-        const bTitle = b.title.toLowerCase();
-
-        if (aTitle === normalizedQuery && bTitle !== normalizedQuery) return -1;
-        if (aTitle !== normalizedQuery && bTitle === normalizedQuery) return 1;
-
-        if (aTitle.startsWith(normalizedQuery) && !bTitle.startsWith(normalizedQuery)) return -1;
-        if (!aTitle.startsWith(normalizedQuery) && bTitle.startsWith(normalizedQuery)) return 1;
-
-        if (aTitle.includes(normalizedQuery) && !bTitle.includes(normalizedQuery)) return -1;
-        if (!aTitle.includes(normalizedQuery) && bTitle.includes(normalizedQuery)) return 1;
-
-        return 0;
-    });
+// Удаляет старые карточки перед новым поиском.
+function clearSearchResults() {
+    document.getElementById('resultslist').innerHTML = '';
 }
 
-//Функция для выбора лучшего источника для одной манги на основе предпочтительного языка и количества глав
-function getBestSource(sources = [], preferredLanguage) {
-    if (sources.length === 0) return null;
-
-    const bestSource = sources
-        .slice()
-        .sort((a, b) => {
-            if (a.language === preferredLanguage && b.language !== preferredLanguage) return -1;
-            if (a.language !== preferredLanguage && b.language === preferredLanguage) return 1;
-
-            return b.chaptersCount - a.chaptersCount;
-        })[0];
-
-    return bestSource ? { ...bestSource } : null;
+// Показывает короткое сообщение вместо списка карточек.
+function showSearchMessage(text) {
+    const resultsList = document.getElementById('resultslist');
+    resultsList.textContent = text;
 }
 
-//Функция для выбора лучшего источника манги на основе предпочтительного языка
-function prepareMangaResults(mangas, preferredLanguage) {
-    return mangas.map(manga => {
-        const sources = manga.sources ? manga.sources.map(source => ({ ...source })) : [];
-
-        return {
-            ...manga,
-            sources,
-            bestSource: getBestSource(sources, preferredLanguage)
-        };
-    });
-}
-
-//Тестовая выборка для проверки отрисовки карточек
-const testMangas = [
-    {
-        id: 1,
-        title: 'One Piece',
-        description: 'Приключения пиратской команды в поисках легендарного сокровища.',
-        coverUrl: '',
-        originalUrl: 'https://mangaplus.shueisha.co.jp/titles/100020',
-        chaptersCount: 1100
-    },
-    {
-        id: 2,
-        title: 'Solo Leveling',
-        description: 'Охотник низкого ранга получает шанс стать сильнейшим.',
-        coverUrl: '',
-        originalUrl: 'https://www.tappytoon.com/en/book/solo-leveling-official',
-        chaptersCount: 200
-    },
-    {
-        id: 3,
-        title: 'One Piece: Romance Dawn',
-        description: 'Предыстория One Piece, рассказывающая о ранних приключениях Луффи.',
-        coverUrl: '',
-        originalUrl: 'https://mangaplus.shueisha.co.jp/titles/100020',
-        chaptersCount: 10
-    }
-];
-//Отрисовка карточек
-function createMangaCard(manga) {
-    const card = document.createElement('div');
-    card.className = 'manga-card';
-
-    const title = document.createElement('h3');
-    title.textContent = manga.title;
-
-    const description = document.createElement('p');
-    description.textContent = manga.description;
-
-    const chapters = document.createElement('p');
-    chapters.textContent = `Глав: ${manga.chaptersCount}`;
-
-    //Можно добавить, если у меня будет встроенный ридер, но пока что не нужно.
-    //Тогда "Читать" может открывать “лучший доступный вариант” автоматически
-    // const readButton = document.createElement('button');
-    // readButton.textContent = 'Читать';
-    // readButton.addEventListener('click', () => {
-    //     console.log('Открыть чтение:', manga);
-    // });
-
-    const translateButton = document.createElement('button');
-    translateButton.textContent = 'ИИ-перевод';
-    translateButton.addEventListener('click', () => {
-        console.log('Перевести:', manga);
-    });
-
-    const originalButton = document.createElement('button');
-    originalButton.textContent = 'Оригинал';
-    originalButton.addEventListener('click', () => {
-        window.open(manga.originalUrl, '_blank');
-    });
-
-    card.append(title, description, chapters, translateButton, originalButton);
-
-    return card;
-}
-
-//функция для отрисовки результатов поиска(показывает отрисованные карточки)
+// ОТРИСОВКА РЕЗУЛЬТАТОВ
+// Получает уже готовый массив манги и добавляет карточки в HTML.
 function renderSearchResults(mangas, query) {
-    const results = document.getElementById('results');
-    const searchStatus = document.getElementById('searchStatus');
     const resultsList = document.getElementById('resultslist');
 
-    results.style.display = 'block';
-    searchStatus.textContent = `Результаты поиска для: "${query}"`;
+    setSearchStatus(`Результаты поиска для: "${query}"`);
     resultsList.innerHTML = '';
 
     if (mangas.length === 0) {
@@ -191,10 +77,90 @@ function renderSearchResults(mangas, query) {
         resultsList.appendChild(card);
     });
 }
-//нажатие на кнопку поиска, сначала мышкой, потом Enter
+
+// Создает одну карточку манги.
+// Здесь находятся кнопки "ИИ-перевод" и "Открыть источник".
+function createMangaCard(manga) {
+    const card = document.createElement('article');
+    card.className = 'manga-card';
+
+    if (manga.coverUrl) {
+        const cover = document.createElement('img');
+        cover.className = 'manga-cover';
+        cover.src = manga.coverUrl;
+        cover.alt = `Обложка ${manga.title}`;
+        card.appendChild(cover);
+    }
+
+    const content = document.createElement('div');
+    content.className = 'manga-card-content';
+
+    const title = document.createElement('h3');
+    title.textContent = manga.title;
+
+    const description = document.createElement('p');
+    description.className = 'manga-description';
+    description.textContent = manga.description || 'Описание пока не найдено.';
+
+    const meta = document.createElement('p');
+    meta.className = 'manga-meta';
+    meta.textContent = getMangaMetaText(manga);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'manga-actions';
+
+    // TODO: подключить отдельный экран/режим ИИ-перевода.
+    const translateButton = document.createElement('button');
+    translateButton.type = 'button';
+    translateButton.textContent = 'ИИ-перевод';
+    translateButton.addEventListener('click', () => {
+        console.log('ИИ-перевод:', manga);
+        alert('ИИ-перевод добавим следующим этапом.');
+    });
+
+    // Открывает лучший найденный источник. Сейчас это может быть сайт для чтения или каталог.
+    const originalButton = document.createElement('button');
+    originalButton.type = 'button';
+    originalButton.textContent = 'Открыть источник';
+    originalButton.disabled = !getBestUrl(manga);
+    originalButton.addEventListener('click', () => {
+        const url = getBestUrl(manga);
+        if (url) window.open(url, '_blank');
+    });
+
+    buttons.append(translateButton, originalButton);
+    content.append(title, meta, description, buttons);
+    card.appendChild(content);
+
+    return card;
+}
+
+// Собирает короткую строку под названием карточки:
+// количество глав, список источников и лучший источник.
+function getMangaMetaText(manga) {
+    const sourceNames = (manga.sources || []).map(source => source.siteName);
+    const uniqueSourceNames = Array.from(new Set(sourceNames));
+    const chapters = manga.chaptersCount || (manga.bestSource && manga.bestSource.chaptersCount);
+    const parts = [];
+
+    if (chapters) parts.push(`Глав: ${chapters}`);
+    if (uniqueSourceNames.length > 0) parts.push(`Источники: ${uniqueSourceNames.join(', ')}`);
+    if (manga.bestSource) parts.push(`Лучший: ${manga.bestSource.siteName}`);
+
+    return parts.join(' | ') || 'Источник пока не определен';
+}
+
+// Возвращает ссылку, которую открывает кнопка "Открыть источник".
+function getBestUrl(manga) {
+    return (manga.bestSource && manga.bestSource.url) || manga.originalUrl || '';
+}
+
+// Нажатие на кнопку поиска мышкой.
 searchButton.addEventListener('click', searchManga);
-searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+
+// Нажатие Enter в поле поиска.
+searchInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
         searchManga();
     }
 });

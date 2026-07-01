@@ -1,37 +1,37 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manga Search AI</title>
-    <!-- Подключение стилей -->
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <!-- Главный контейнер, чтобы все центрировать -->
-    <div id="container">
-        <!-- Логотип, но пока просто текст -->
+    <main id="container">
         <h1>Manga Search AI</h1>
-        <!-- объединяем input и button для применения flex раскладки -->
-
         <!-- 
         БЛОК ПОИСКА
          -->
         <div id="searchbox">
             <input type="text" id="searchInput" placeholder="Введите название манги">
-            <button id="searchButton">Найти</button>
+            <button id="searchButton" type="button">Найти</button>
         </div>
-
-        <!-- блок результата, изначально скрыт. Не знаю, стоит ли добавлять class, если уже есть id -->
-        <div id="results" class="results" style="display: none;">
+        
+        <!--
+        БЛОК РЕЗУЛЬТАТОВ
+        Изначально скрыт. JS показывает его, когда начинается поиск или приходят результаты.
+        -->
+        <section id="results" class="results" style="display: none;">
             <h2 id="searchStatus"></h2>
-            <!-- контейнер для карточек манги, с помощью js добавим карточки -->
+            <!-- Контейнер для карточек манги, которые создаются в script.js -->
             <div id="resultslist" class="resultslist"></div>
+        </section>
+    </main>
 
-        </div>
-    </div>
     <script src="script.js"></script>
 </body>
 
 </html>
+
