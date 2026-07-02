@@ -23,6 +23,7 @@ const STATIC_FILES = new Set(['/', '/index.html', '/style.css', '/script.js']);
 // Каждый адаптер должен вернуть данные в одном общем формате, чтобы frontend не зависел от конкретного API.
 const sourceAdapters = [
     { name: 'MangaDex', search: searchMangaDex },
+    { name: 'MangaUpdates', search: searchMangaUpdates },
     { name: 'AniList', search: searchAniList },
     { name: 'Jikan', search: searchJikan },
     { name: 'Kitsu', search: searchKitsu }
@@ -88,7 +89,7 @@ async function serveStaticFile(pathname, res) {
 async function searchAllSources(query, preferredLanguage) {
     const settled = await Promise.all(sourceAdapters.map(async adapter => {
         try {
-            const results = await adapter.search(query);
+            const results = await adapter.search(query, preferredLanguage);
             return { source: adapter.name, results, error: null };
         } catch (error) {
             return { source: adapter.name, results: [], error: error.message };
@@ -113,7 +114,7 @@ async function searchAllSources(query, preferredLanguage) {
 }
 
 // Источник MangaDex: ближе всего к сайту для чтения, поэтому помечаем его как type: reader.
-async function searchMangaDex(query) {
+async function searchMangaDex(query, preferredLanguage) {
     const url = new URL('https://api.mangadex.org/manga');
     url.searchParams.set('title', query);
     url.searchParams.set('limit', String(SOURCE_LIMIT));
@@ -124,12 +125,14 @@ async function searchMangaDex(query) {
 
     const json = await fetchJson(url);
 
-    return (json.data || []).map(item => {
+    return Promise.all((json.data || []).map(async item => {
         const attributes = item.attributes || {};
         const title = pickLocalizedText(attributes.title) || 'Untitled';
         const description = pickLocalizedText(attributes.description);
         const coverUrl = getMangaDexCoverUrl(item);
-        const chaptersCount = toNumber(attributes.lastChapter);
+        const aggregate = await getMangaDexAggregate(item.id, preferredLanguage);
+        const chaptersCount = null;
+        const latestChapter = aggregate.latestChapter || attributes.lastChapter || null;
         const mangaUrl = `https://mangadex.org/title/${item.id}`;
 
         return {
@@ -139,6 +142,7 @@ async function searchMangaDex(query) {
             description,
             coverUrl,
             chaptersCount,
+            latestChapter,
             originalUrl: mangaUrl,
             sources: [
                 {
@@ -146,12 +150,12 @@ async function searchMangaDex(query) {
                     url: mangaUrl,
                     language: attributes.originalLanguage || 'unknown',
                     chaptersCount,
-                    latestChapter: attributes.lastChapter || null,
+                    latestChapter,
                     type: 'reader'
                 }
             ]
         };
-    });
+    }));
 }
 
 // Источник AniList: хороший каталог с обложками, описаниями и альтернативными названиями.
@@ -185,6 +189,7 @@ async function searchAniList(query) {
         description: stripHtml(item.description),
         coverUrl: (item.coverImage || {}).large || (item.coverImage || {}).medium || '',
         chaptersCount: toNumber(item.chapters),
+        latestChapter: item.chapters ? String(item.chapters) : null,
         originalUrl: item.siteUrl,
         sources: [
             {
@@ -197,6 +202,70 @@ async function searchAniList(query) {
             }
         ]
     }));
+}
+
+// Источник MangaUpdates: полезен для альтернативных названий, latest_chapter
+// и официальных ссылок на оригиналы/переводы из описания.
+async function searchMangaUpdates(query) {
+    const json = await fetchJson('https://api.mangaupdates.com/v1/series/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            search: query,
+            stype: 'title',
+            perpage: SOURCE_LIMIT
+        })
+    });
+
+    const records = (json.results || [])
+        .map(result => result.record)
+        .filter(Boolean)
+        .slice(0, SOURCE_LIMIT);
+
+    return Promise.all(records.map(async record => {
+        const details = await getMangaUpdatesDetails(record.series_id);
+        const manga = details || record;
+        const officialSources = extractOfficialSourcesFromText(manga.description || '');
+        const latestChapter = manga.latest_chapter ? String(manga.latest_chapter) : null;
+        const chaptersCount = toNumber(manga.latest_chapter);
+
+        return {
+            id: `mangaupdates:${manga.series_id}`,
+            title: manga.title || 'Untitled',
+            aliases: [
+                manga.title,
+                ...((manga.associated || []).map(item => item.title))
+            ].filter(Boolean),
+            description: manga.description || '',
+            coverUrl: (((manga.image || {}).url || {}).original) || (((manga.image || {}).url || {}).thumb) || '',
+            chaptersCount,
+            latestChapter,
+            originalUrl: manga.url,
+            sources: [
+                {
+                    siteName: 'MangaUpdates',
+                    url: manga.url,
+                    language: 'unknown',
+                    chaptersCount,
+                    latestChapter,
+                    type: 'catalog'
+                },
+                ...officialSources.map(source => ({
+                    ...source,
+                    chaptersCount,
+                    latestChapter
+                }))
+            ]
+        };
+    }));
+}
+
+async function getMangaUpdatesDetails(seriesId) {
+    try {
+        return await fetchJson(`https://api.mangaupdates.com/v1/series/${seriesId}`);
+    } catch {
+        return null;
+    }
 }
 
 // Источник Jikan/MyAnimeList: каталог. Иногда может отвечать медленно или отдавать 504.
@@ -214,6 +283,7 @@ async function searchJikan(query) {
         description: item.synopsis || '',
         coverUrl: (((item.images || {}).jpg || {}).large_image_url) || (((item.images || {}).jpg || {}).image_url) || '',
         chaptersCount: toNumber(item.chapters),
+        latestChapter: item.chapters ? String(item.chapters) : null,
         originalUrl: item.url,
         sources: [
             {
@@ -250,6 +320,7 @@ async function searchKitsu(query) {
             description: attributes.synopsis || '',
             coverUrl: ((attributes.posterImage || {}).large) || ((attributes.posterImage || {}).medium) || '',
             chaptersCount: toNumber(attributes.chapterCount),
+            latestChapter: attributes.chapterCount ? String(attributes.chapterCount) : null,
             originalUrl: kitsuUrl,
             sources: [
                 {
@@ -298,7 +369,7 @@ function mergeMangaResults(results) {
     const merged = new Map();
 
     for (const manga of results) {
-        const key = normalizeTitle(manga.title || manga.id);
+        const key = findMergeKey(merged, manga) || getPrimaryMergeKey(manga);
         const existing = merged.get(key);
 
         if (!existing) {
@@ -316,6 +387,7 @@ function mergeMangaResults(results) {
         existing.coverUrl = existing.coverUrl || manga.coverUrl || '';
         existing.originalUrl = existing.originalUrl || manga.originalUrl || '';
         existing.chaptersCount = maxNullable(existing.chaptersCount, manga.chaptersCount);
+        existing.latestChapter = maxChapter(existing.latestChapter, manga.latestChapter);
     }
 
     return Array.from(merged.values());
@@ -324,11 +396,13 @@ function mergeMangaResults(results) {
 // Готовит одну мангу к отправке на frontend: копирует sources и добавляет bestSource.
 function prepareMangaResult(manga, preferredLanguage) {
     const sources = uniqueSources(manga.sources || []);
+    const bestSource = getBestSource(sources, preferredLanguage);
 
     return {
         ...manga,
         sources,
-        bestSource: getBestSource(sources, preferredLanguage)
+        latestChapter: manga.latestChapter || (bestSource && bestSource.latestChapter) || null,
+        bestSource
     };
 }
 
@@ -342,14 +416,24 @@ function getBestSource(sources = [], preferredLanguage) {
         const bLanguageScore = b.language === preferredLanguage ? 1 : 0;
         if (aLanguageScore !== bLanguageScore) return bLanguageScore - aLanguageScore;
 
-        const aTypeScore = a.type === 'reader' ? 1 : 0;
-        const bTypeScore = b.type === 'reader' ? 1 : 0;
+        const aTypeScore = getSourceTypeScore(a.type);
+        const bTypeScore = getSourceTypeScore(b.type);
         if (aTypeScore !== bTypeScore) return bTypeScore - aTypeScore;
 
-        return (b.chaptersCount || 0) - (a.chaptersCount || 0);
+        return getChapterNumber(b.latestChapter) - getChapterNumber(a.latestChapter);
     })[0];
 
     return bestSource ? { ...bestSource } : null;
+}
+
+function getSourceTypeScore(type) {
+    const scores = {
+        reader: 3,
+        official: 2,
+        catalog: 1
+    };
+
+    return scores[type] || 0;
 }
 
 // Сортирует найденные манги по релевантности запросу, не меняя исходный массив.
@@ -357,7 +441,7 @@ function sortMangasByRelevance(mangas, query) {
     return mangas.slice().sort((a, b) => {
         const scoreDiff = getRelevanceScore(b, query) - getRelevanceScore(a, query);
         if (scoreDiff !== 0) return scoreDiff;
-        return (b.chaptersCount || 0) - (a.chaptersCount || 0);
+        return getChapterNumber(b.latestChapter) - getChapterNumber(a.latestChapter);
     });
 }
 
@@ -388,6 +472,54 @@ function getMangaDexAliases(attributes) {
     return uniqueStrings([pickLocalizedText(attributes.title), ...altTitles]);
 }
 
+async function getMangaDexAggregate(mangaId, translatedLanguage) {
+    try {
+        const preferredAggregate = await fetchMangaDexAggregate(mangaId, translatedLanguage);
+
+        if (preferredAggregate.latestChapter || !translatedLanguage) {
+            return preferredAggregate;
+        }
+
+        // Если на выбранном языке переводов нет, показываем общую последнюю главу,
+        // чтобы one-shot и редкие тайтлы не выглядели полностью пустыми.
+        return await fetchMangaDexAggregate(mangaId);
+    } catch {
+        return { chaptersCount: null, latestChapter: null };
+    }
+}
+
+async function fetchMangaDexAggregate(mangaId, translatedLanguage) {
+    const url = new URL(`https://api.mangadex.org/manga/${mangaId}/aggregate`);
+    if (translatedLanguage) {
+        url.searchParams.append('translatedLanguage[]', translatedLanguage);
+    }
+
+    const json = await fetchJson(url);
+    return getChapterInfoFromMangaDexAggregate(json);
+}
+
+function getChapterInfoFromMangaDexAggregate(json) {
+    const chapters = Object.values(json.volumes || {})
+        .flatMap(volume => Object.values((volume || {}).chapters || {}));
+
+    if (chapters.length === 0) {
+        return { chaptersCount: null, latestChapter: null };
+    }
+
+    const chapterNumbers = chapters
+        .map(chapter => toNumber(chapter.chapter))
+        .filter(number => number !== null);
+
+    const latestChapter = chapterNumbers.length > 0
+        ? String(Math.max(...chapterNumbers))
+        : null;
+
+    return {
+        chaptersCount: null,
+        latestChapter
+    };
+}
+
 function pickLocalizedText(value) {
     if (!value) return '';
     if (typeof value === 'string') return value;
@@ -399,6 +531,64 @@ function stripHtml(text) {
     return text ? String(text).replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() : '';
 }
 
+function extractOfficialSourcesFromText(text) {
+    const matches = String(text || '').matchAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g);
+    const sources = [];
+
+    for (const match of matches) {
+        const label = match[1].trim();
+        const url = match[2].trim();
+
+        sources.push({
+            siteName: getSiteNameFromUrl(url, label),
+            url,
+            language: getLanguageFromSourceLabel(label),
+            chaptersCount: null,
+            latestChapter: null,
+            type: 'official'
+        });
+    }
+
+    return uniqueSources(sources);
+}
+
+function getSiteNameFromUrl(url, fallback) {
+    try {
+        const hostname = new URL(url).hostname.replace(/^www\./, '');
+        const knownSites = {
+            'mangaplus.shueisha.co.jp': 'Manga Plus',
+            'shonenjumpplus.com': 'Shonen Jump+',
+            'shueisha.co.jp': 'Shueisha',
+            'viz.com': 'Viz',
+            'kakaopage.com': 'Kakao Page',
+            'page.kakao.com': 'Kakao Page',
+            'series.naver.com': 'Naver Series',
+            'ridibooks.com': 'Ridibooks'
+        };
+
+        return knownSites[hostname] || hostname;
+    } catch {
+        return fallback || 'Official source';
+    }
+}
+
+function getLanguageFromSourceLabel(label) {
+    const normalizedLabel = String(label || '').toLowerCase();
+    const languageMap = [
+        ['russian', 'ru'],
+        ['рус', 'ru'],
+        ['english', 'en'],
+        ['french', 'fr'],
+        ['spanish', 'es'],
+        ['korean', 'ko'],
+        ['japanese', 'ja'],
+        ['original', 'ja']
+    ];
+
+    const match = languageMap.find(([name]) => normalizedLabel.includes(name));
+    return match ? match[1] : 'unknown';
+}
+
 function normalizeTitle(title) {
     return String(title || '')
         .toLowerCase()
@@ -406,17 +596,74 @@ function normalizeTitle(title) {
         .trim();
 }
 
+function getTitleKeys(manga) {
+    return uniqueStrings([manga.title, ...(manga.aliases || [])])
+        .map(normalizeTitle)
+        .filter(Boolean);
+}
+
+function getPrimaryMergeKey(manga) {
+    return getTitleKeys(manga)[0] || normalizeTitle(manga.id);
+}
+
+function findMergeKey(merged, manga) {
+    const mangaKeys = getTitleKeys(manga);
+
+    for (const [key, existing] of merged.entries()) {
+        const existingKeys = getTitleKeys(existing);
+        const sharedKey = existingKeys.find(existingKey => mangaKeys.includes(existingKey));
+
+        if (sharedKey && shouldMergeBySharedTitle(existing, manga, sharedKey)) {
+            return key;
+        }
+    }
+
+    return null;
+}
+
+function shouldMergeBySharedTitle(existing, manga, sharedKey) {
+    const existingPrimary = normalizeTitle(existing.title);
+    const mangaPrimary = normalizeTitle(manga.title);
+
+    if (existingPrimary === sharedKey && mangaPrimary === sharedKey) {
+        return true;
+    }
+
+    if (hasDifferentSpecialType(existingPrimary, mangaPrimary)) {
+        return false;
+    }
+
+    return getTitleSimilarity(sharedKey, existingPrimary) >= 0.65
+        && getTitleSimilarity(sharedKey, mangaPrimary) >= 0.65;
+}
+
+function hasDifferentSpecialType(aTitle, bTitle) {
+    const specialWords = ['doujinshi', 'one shot', 'oneshot', 'novel'];
+    return specialWords.some(word => aTitle.includes(word) !== bTitle.includes(word));
+}
+
+function getTitleSimilarity(aTitle, bTitle) {
+    const aLength = normalizeTitle(aTitle).length;
+    const bLength = normalizeTitle(bTitle).length;
+
+    if (aLength === 0 || bLength === 0) return 0;
+    return Math.min(aLength, bLength) / Math.max(aLength, bLength);
+}
+
 function uniqueStrings(values) {
     return Array.from(new Set(values.filter(Boolean).map(value => String(value).trim()).filter(Boolean)));
 }
 
-// Убирает полностью одинаковые источники, чтобы в данных не копились дубли.
+// Убирает дубли источников внутри одной карточки.
+// Если один и тот же сайт вернул несколько похожих записей, оставляем более полезную.
 function uniqueSources(sources) {
     const map = new Map();
 
     for (const source of sources) {
-        const key = `${source.siteName || ''}:${source.url || ''}`;
-        if (!map.has(key)) {
+        const key = source.siteName || source.url || '';
+        const existing = map.get(key);
+
+        if (!existing || compareSources(source, existing) < 0) {
             map.set(key, { ...source });
         }
     }
@@ -424,15 +671,37 @@ function uniqueSources(sources) {
     return Array.from(map.values());
 }
 
+function compareSources(a, b) {
+    const aTypeScore = getSourceTypeScore(a.type);
+    const bTypeScore = getSourceTypeScore(b.type);
+    if (aTypeScore !== bTypeScore) return bTypeScore - aTypeScore;
+
+    return getChapterNumber(b.latestChapter) - getChapterNumber(a.latestChapter);
+}
+
 function toNumber(value) {
     const number = Number.parseFloat(value);
     return Number.isFinite(number) ? number : null;
+}
+
+function getChapterNumber(value) {
+    return toNumber(value) || 0;
 }
 
 function maxNullable(a, b) {
     if (a == null) return b == null ? null : b;
     if (b == null) return a;
     return Math.max(a, b);
+}
+
+function maxChapter(a, b) {
+    const aNumber = toNumber(a);
+    const bNumber = toNumber(b);
+
+    if (aNumber == null) return b || null;
+    if (bNumber == null) return a || null;
+
+    return String(Math.max(aNumber, bNumber));
 }
 
 function countryToLanguage(country) {

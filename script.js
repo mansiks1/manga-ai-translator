@@ -136,14 +136,14 @@ function createMangaCard(manga) {
 }
 
 // Собирает короткую строку под названием карточки:
-// количество глав, список источников и лучший источник.
+// последняя глава, список источников и лучший источник.
 function getMangaMetaText(manga) {
     const sourceNames = (manga.sources || []).map(source => source.siteName);
     const uniqueSourceNames = Array.from(new Set(sourceNames));
-    const chapters = manga.chaptersCount || (manga.bestSource && manga.bestSource.chaptersCount);
+    const latestChapter = manga.latestChapter ?? (manga.bestSource && manga.bestSource.latestChapter);
     const parts = [];
 
-    if (chapters) parts.push(`Глав: ${chapters}`);
+    parts.push(`Последняя глава: ${latestChapter || 'неизвестно'}`);
     if (uniqueSourceNames.length > 0) parts.push(`Источники: ${uniqueSourceNames.join(', ')}`);
     if (manga.bestSource) parts.push(`Лучший: ${manga.bestSource.siteName}`);
 
