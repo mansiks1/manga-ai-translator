@@ -15,7 +15,7 @@
     display: flex;
     justify-content: center;
     gap: 8px;
-    margin-bottom: 28px;
+    margin-bottom: 12px;
 }
 
 #searchInput {
@@ -27,6 +27,7 @@
 }
 
 #searchButton,
+.language-option,
 .manga-actions button {
     padding: 10px 16px;
     border: 0;
@@ -38,8 +39,35 @@
 }
 
 #searchButton:hover,
+.language-option:hover,
 .manga-actions button:hover {
     background: #185abc;
+}
+
+.language-selector {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 28px;
+}
+
+.language-label {
+    margin-right: 4px;
+    color: #52606d;
+    font-size: 14px;
+}
+
+.language-option {
+    padding: 7px 11px;
+    background: #e5eaf0;
+    color: #263241;
+}
+
+.language-option.active {
+    background: #1f6feb;
+    color: white;
 }
 
 .manga-actions button:disabled {
@@ -104,6 +132,10 @@
 @media (max-width: 560px) {
     #searchbox {
         flex-direction: column;
+    }
+
+    .language-selector {
+        justify-content: flex-start;
     }
 
     .manga-card {

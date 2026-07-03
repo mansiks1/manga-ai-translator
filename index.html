@@ -18,6 +18,20 @@
             <input type="text" id="searchInput" placeholder="Введите название манги">
             <button id="searchButton" type="button">Найти</button>
         </div>
+
+        <!--
+        ПРЕДПОЧТИТЕЛЬНЫЙ ЯЗЫК ПЕРЕВОДА
+        Сейчас влияет на поиск последней главы в MangaDex и позже будет использоваться для ИИ-перевода.
+        -->
+        <div id="languageSelector" class="language-selector" aria-label="Предпочтительный язык перевода">
+            <span class="language-label">Перевод:</span>
+            <button class="language-option active" type="button" data-language="ru">RU</button>
+            <button class="language-option" type="button" data-language="en">EN</button>
+            <button class="language-option" type="button" data-language="ja">JA</button>
+            <button class="language-option" type="button" data-language="ko">KO</button>
+            <button class="language-option" type="button" data-language="zh">ZH</button>
+            <button class="language-option" type="button" data-language="">Все</button>
+        </div>
         
         <!--
         БЛОК РЕЗУЛЬТАТОВ
@@ -34,4 +48,3 @@
 </body>
 
 </html>
-

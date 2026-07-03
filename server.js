@@ -54,7 +54,8 @@ server.listen(PORT, () => {
 // Проверяет запрос пользователя и запускает поиск по всем источникам.
 async function handleSearchRequest(requestUrl, res) {
     const query = (requestUrl.searchParams.get('q') || '').trim();
-    const preferredLanguage = (requestUrl.searchParams.get('lang') || 'ru').trim().toLowerCase();
+    const languageParam = requestUrl.searchParams.get('lang');
+    const preferredLanguage = languageParam === null ? 'ru' : languageParam.trim().toLowerCase();
 
     if (!query) {
         sendJson(res, 400, { error: 'Search query is required' });
@@ -723,7 +724,6 @@ function sendText(res, statusCode, text) {
     res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(text);
 }
-
 
 
 

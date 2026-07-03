@@ -1,8 +1,10 @@
 ﻿const searchButton = document.getElementById('searchButton');
 const searchInput = document.getElementById('searchInput');
+const languageButtons = document.querySelectorAll('.language-option');
 
-// Предпочтительный язык пользователя. Позже можно вынести в настройки.
-const preferredLanguage = 'ru';
+// Предпочтительный язык перевода.
+// Сейчас влияет на последнюю главу MangaDex, позже будет использоваться для ИИ-перевода.
+let preferredLanguage = 'ru';
 
 // ПОИСК МАНГИ
 // Обрабатывает кнопку "Найти" и Enter: берет текст из поля, отправляет запрос на backend
@@ -37,6 +39,21 @@ async function fetchMangaSearch(query) {
 
     const data = await response.json();
     return data.results || [];
+}
+
+// Меняет предпочтительный язык перевода.
+// Если результаты уже показаны, сразу повторяем поиск с новым языком.
+function setPreferredLanguage(language) {
+    preferredLanguage = language;
+
+    languageButtons.forEach(button => {
+        button.classList.toggle('active', button.dataset.language === language);
+    });
+
+    const results = document.getElementById('results');
+    if (results.style.display !== 'none' && searchInput.value.trim() !== '') {
+        searchManga();
+    }
 }
 
 // Общая функция для статуса поиска: "Идет поиск", "Результаты поиска", "Ошибка".
@@ -114,7 +131,7 @@ function createMangaCard(manga) {
     translateButton.type = 'button';
     translateButton.textContent = 'ИИ-перевод';
     translateButton.addEventListener('click', () => {
-        console.log('ИИ-перевод:', manga);
+        console.log('ИИ-перевод:', manga, 'язык:', preferredLanguage || 'all');
         alert('ИИ-перевод добавим следующим этапом.');
     });
 
@@ -163,4 +180,11 @@ searchInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
         searchManga();
     }
+});
+
+// Выбор предпочтительного языка перевода.
+languageButtons.forEach(button => {
+    button.addEventListener('click', () => {
+        setPreferredLanguage(button.dataset.language);
+    });
 });
