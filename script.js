@@ -1,36 +1,54 @@
 ﻿const searchButton = document.getElementById('searchButton');
+const deepSearchButton = document.getElementById('deepSearchButton');
 const searchInput = document.getElementById('searchInput');
 const languageButtons = document.querySelectorAll('.language-option');
 
 // Предпочтительный язык перевода.
 // Сейчас влияет на последнюю главу MangaDex, позже будет использоваться для ИИ-перевода.
 let preferredLanguage = 'ru';
+let lastSearchMode = 'normal';
 
 // ПОИСК МАНГИ
-// Обрабатывает кнопку "Найти" и Enter: берет текст из поля, отправляет запрос на backend
-// и передает найденную мангу в функцию отрисовки карточек.
+// Обычный поиск быстро обращается к backend и ищет по введенному названию.
 async function searchManga() {
+    await runSearch('normal');
+}
+
+// ГЛУБОКИЙ ПОИСК
+// Глубокий поиск пробует несколько вариантов названия и лучше подходит для альтернативных названий.
+async function deepSearchManga() {
+    await runSearch('deep');
+}
+
+// Общая функция для обычного и глубокого поиска.
+async function runSearch(mode) {
     const query = searchInput.value.trim();
     if (query === '') return;
 
-    // Показываем пользователю, что поиск начался, и очищаем старые карточки.
-    setSearchStatus(`Идет поиск для: "${query}"`);
+    lastSearchMode = mode;
+    const isDeepSearch = mode === 'deep';
+
+    setSearchStatus(`${isDeepSearch ? 'Идет глубокий поиск' : 'Идет поиск'} для: "${query}"`);
     clearSearchResults();
+    setSearchButtonsDisabled(true);
 
     try {
-        const mangas = await fetchMangaSearch(query);
-        renderSearchResults(mangas, query);
+        const mangas = await fetchMangaSearch(query, mode);
+        renderSearchResults(mangas, query, mode);
     } catch (error) {
         console.error(error);
         setSearchStatus('Ошибка при поиске');
         showSearchMessage('Не получилось получить данные. Проверь, запущен ли backend.');
+    } finally {
+        setSearchButtonsDisabled(false);
     }
 }
 
 // Запрос к нашему backend.
 // Frontend не ходит напрямую в MangaDex/AniList/Jikan/Kitsu, этим занимается server.js.
-async function fetchMangaSearch(query) {
-    const url = `/api/search?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(preferredLanguage)}`;
+async function fetchMangaSearch(query, mode = 'normal') {
+    const endpoint = mode === 'deep' ? '/api/deep-search' : '/api/search';
+    const url = `${endpoint}?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(preferredLanguage)}`;
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -42,7 +60,7 @@ async function fetchMangaSearch(query) {
 }
 
 // Меняет предпочтительный язык перевода.
-// Если результаты уже показаны, сразу повторяем поиск с новым языком.
+// Если результаты уже показаны, сразу повторяем поиск с тем же режимом.
 function setPreferredLanguage(language) {
     preferredLanguage = language;
 
@@ -52,8 +70,14 @@ function setPreferredLanguage(language) {
 
     const results = document.getElementById('results');
     if (results.style.display !== 'none' && searchInput.value.trim() !== '') {
-        searchManga();
+        runSearch(lastSearchMode);
     }
+}
+
+// Блокирует кнопки поиска, пока backend еще отвечает.
+function setSearchButtonsDisabled(disabled) {
+    searchButton.disabled = disabled;
+    deepSearchButton.disabled = disabled;
 }
 
 // Общая функция для статуса поиска: "Идет поиск", "Результаты поиска", "Ошибка".
@@ -78,10 +102,11 @@ function showSearchMessage(text) {
 
 // ОТРИСОВКА РЕЗУЛЬТАТОВ
 // Получает уже готовый массив манги и добавляет карточки в HTML.
-function renderSearchResults(mangas, query) {
+function renderSearchResults(mangas, query, mode = 'normal') {
     const resultsList = document.getElementById('resultslist');
+    const titlePrefix = mode === 'deep' ? 'Результаты глубокого поиска' : 'Результаты поиска';
 
-    setSearchStatus(`Результаты поиска для: "${query}"`);
+    setSearchStatus(`${titlePrefix} для: "${query}"`);
     resultsList.innerHTML = '';
 
     if (mangas.length === 0) {
@@ -157,7 +182,7 @@ function createMangaCard(manga) {
 function getMangaMetaText(manga) {
     const sourceNames = (manga.sources || []).map(source => source.siteName);
     const uniqueSourceNames = Array.from(new Set(sourceNames));
-    const latestChapter = manga.latestChapter ?? (manga.bestSource && manga.bestSource.latestChapter);
+    const latestChapter = (manga.bestSource && manga.bestSource.latestChapter) ?? manga.latestChapter;
     const parts = [];
 
     parts.push(`Последняя глава: ${latestChapter || 'неизвестно'}`);
@@ -172,10 +197,13 @@ function getBestUrl(manga) {
     return (manga.bestSource && manga.bestSource.url) || manga.originalUrl || '';
 }
 
-// Нажатие на кнопку поиска мышкой.
+// Нажатие на кнопку обычного поиска мышкой.
 searchButton.addEventListener('click', searchManga);
 
-// Нажатие Enter в поле поиска.
+// Нажатие на кнопку глубокого поиска мышкой.
+deepSearchButton.addEventListener('click', deepSearchManga);
+
+// Нажатие Enter в поле поиска запускает обычный поиск.
 searchInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
         searchManga();

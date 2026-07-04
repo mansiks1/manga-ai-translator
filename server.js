@@ -39,6 +39,11 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        if (requestUrl.pathname === '/api/deep-search') {
+            await handleDeepSearchRequest(requestUrl, res);
+            return;
+        }
+
         await serveStaticFile(requestUrl.pathname, res);
     } catch (error) {
         console.error(error);
@@ -63,6 +68,22 @@ async function handleSearchRequest(requestUrl, res) {
     }
 
     const result = await searchAllSources(query, preferredLanguage);
+    sendJson(res, 200, result);
+}
+
+// API endpoint: /api/deep-search?q=название&lang=ru
+// Делает более широкий поиск: пробует несколько вариантов названия и объединяет результаты.
+async function handleDeepSearchRequest(requestUrl, res) {
+    const query = (requestUrl.searchParams.get('q') || '').trim();
+    const languageParam = requestUrl.searchParams.get('lang');
+    const preferredLanguage = languageParam === null ? 'ru' : languageParam.trim().toLowerCase();
+
+    if (!query) {
+        sendJson(res, 400, { error: 'Search query is required' });
+        return;
+    }
+
+    const result = await deepSearchAllSources(query, preferredLanguage);
     sendJson(res, 200, result);
 }
 
@@ -111,6 +132,31 @@ async function searchAllSources(query, preferredLanguage) {
         preferredLanguage,
         results: sortedResults,
         sourceErrors
+    };
+}
+
+// ГЛУБОКИЙ ПОИСК
+// Пока это не ИИ, а расширенный поиск по нескольким вариантам запроса.
+// Позже сюда можно добавить LLM, который будет генерировать оригинальные/альтернативные названия.
+async function deepSearchAllSources(query, preferredLanguage) {
+    const deepQueries = getDeepSearchQueries(query);
+    const batches = await Promise.all(
+        deepQueries.map(deepQuery => searchAllSources(deepQuery, preferredLanguage))
+    );
+
+    const sourceErrors = batches.flatMap(batch => batch.sourceErrors || []);
+    const rawResults = batches.flatMap(batch => batch.results || []);
+    const mergedResults = mergeMangaResults(rawResults);
+    const sortedResults = sortMangasByRelevance(mergedResults, query)
+        .map(manga => prepareMangaResult(manga, preferredLanguage));
+
+    return {
+        query,
+        preferredLanguage,
+        mode: 'deep',
+        usedQueries: deepQueries,
+        results: sortedResults,
+        sourceErrors: uniqueSourceErrors(sourceErrors)
     };
 }
 
@@ -402,7 +448,7 @@ function prepareMangaResult(manga, preferredLanguage) {
     return {
         ...manga,
         sources,
-        latestChapter: manga.latestChapter || (bestSource && bestSource.latestChapter) || null,
+        latestChapter: (bestSource && bestSource.latestChapter) || manga.latestChapter || null,
         bestSource
     };
 }
@@ -444,6 +490,24 @@ function sortMangasByRelevance(mangas, query) {
         if (scoreDiff !== 0) return scoreDiff;
         return getChapterNumber(b.latestChapter) - getChapterNumber(a.latestChapter);
     });
+}
+
+function getDeepSearchQueries(query) {
+    const trimmedQuery = query.trim();
+    const withoutParentheses = trimmedQuery.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+    const beforeColon = trimmedQuery.split(':')[0].trim();
+    const beforeDash = trimmedQuery.split(/\s[-–—]\s/)[0].trim();
+    const withoutSubtitle = trimmedQuery.replace(/[:\-–—].+$/g, '').trim();
+
+    return uniqueStrings([
+        trimmedQuery,
+        withoutParentheses,
+        beforeColon,
+        beforeDash,
+        withoutSubtitle
+    ])
+        .filter(value => value.length >= 3)
+        .slice(0, 4);
 }
 
 // Оценивает совпадение названия: точное совпадение лучше, начало названия следующее,
@@ -672,6 +736,19 @@ function uniqueSources(sources) {
     return Array.from(map.values());
 }
 
+function uniqueSourceErrors(errors) {
+    const map = new Map();
+
+    for (const error of errors) {
+        const key = `${error.source || ''}:${error.error || ''}`;
+        if (!map.has(key)) {
+            map.set(key, error);
+        }
+    }
+
+    return Array.from(map.values());
+}
+
 function compareSources(a, b) {
     const aTypeScore = getSourceTypeScore(a.type);
     const bTypeScore = getSourceTypeScore(b.type);
@@ -724,7 +801,4 @@ function sendText(res, statusCode, text) {
     res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(text);
 }
-
-
-
 

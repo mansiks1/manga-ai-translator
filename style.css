@@ -26,7 +26,7 @@
     font-size: 16px;
 }
 
-#searchButton,
+.search-action,
 .language-option,
 .manga-actions button {
     padding: 10px 16px;
@@ -38,10 +38,24 @@
     font-size: 15px;
 }
 
-#searchButton:hover,
+.search-action:hover,
 .language-option:hover,
 .manga-actions button:hover {
     background: #185abc;
+}
+
+.search-action.secondary {
+    background: #344054;
+}
+
+.search-action.secondary:hover {
+    background: #1f2937;
+}
+
+.search-action:disabled,
+.manga-actions button:disabled {
+    background: #9aa6b2;
+    cursor: not-allowed;
 }
 
 .language-selector {
@@ -68,11 +82,6 @@
 .language-option.active {
     background: #1f6feb;
     color: white;
-}
-
-.manga-actions button:disabled {
-    background: #9aa6b2;
-    cursor: not-allowed;
 }
 
 .results {
