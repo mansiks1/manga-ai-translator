@@ -240,6 +240,7 @@ function renderMangaDexChapterButtons(container, chapters, error = '') {
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = getChapterButtonText(chapter);
+        link.title = `Язык главы: ${getLanguageName(chapter.language)}`;
         list.appendChild(link);
     });
 
@@ -272,7 +273,38 @@ function getMangaDexMangaId(manga) {
 
 function getChapterButtonText(chapter) {
     const chapterNumber = chapter.chapter || '?';
-    return chapter.title ? `Глава ${chapterNumber}: ${chapter.title}` : `Глава ${chapterNumber}`;
+    const language = getLanguageLabel(chapter.language);
+    const baseText = chapter.title ? `Глава ${chapterNumber}: ${chapter.title}` : `Глава ${chapterNumber}`;
+
+    return `${baseText} [${language}]`;
+}
+
+function getLanguageLabel(language) {
+    return String(language || 'unknown').toUpperCase();
+}
+
+function getLanguageName(language) {
+    const languages = {
+        ru: 'русский',
+        en: 'английский',
+        ja: 'японский',
+        ko: 'корейский',
+        zh: 'китайский',
+        'zh-hk': 'китайский',
+        'pt-br': 'португальский',
+        es: 'испанский',
+        fr: 'французский',
+        de: 'немецкий',
+        it: 'итальянский',
+        pl: 'польский',
+        tr: 'турецкий',
+        vi: 'вьетнамский',
+        id: 'индонезийский',
+        th: 'тайский',
+        unknown: 'неизвестный'
+    };
+
+    return languages[language] || language || 'неизвестный';
 }
 
 // Собирает короткую строку под названием карточки:
