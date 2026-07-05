@@ -156,8 +156,7 @@ function createMangaCard(manga) {
     translateButton.type = 'button';
     translateButton.textContent = 'ИИ-перевод';
     translateButton.addEventListener('click', () => {
-        console.log('ИИ-перевод:', manga, 'язык:', preferredLanguage || 'all');
-        alert('ИИ-перевод добавим следующим этапом.');
+        showMangaDexChapterButtons(manga, card);
     });
 
     // Открывает лучший найденный источник. Сейчас это может быть сайт для чтения или каталог.
@@ -175,6 +174,105 @@ function createMangaCard(manga) {
     card.appendChild(content);
 
     return card;
+}
+
+// Первый шаг ИИ-перевода: показываем главы MangaDex как кнопки-ссылки.
+// Позже вместо перехода по ссылке будем брать chapterId, получать страницы и запускать OCR.
+async function showMangaDexChapterButtons(manga, card) {
+    const chaptersContainer = getOrCreateChaptersContainer(card);
+    const mangaDexId = getMangaDexMangaId(manga);
+
+    chaptersContainer.style.display = 'block';
+    chaptersContainer.textContent = '';
+
+    if (!mangaDexId) {
+        chaptersContainer.textContent = 'Для ИИ-перевода пока поддерживаются только тайтлы с источником MangaDex.';
+        return;
+    }
+
+    chaptersContainer.textContent = 'Загружаем главы MangaDex...';
+
+    try {
+        const result = await fetchMangaDexChapters(mangaDexId);
+        renderMangaDexChapterButtons(chaptersContainer, result.chapters, result.error);
+    } catch (error) {
+        console.error(error);
+        chaptersContainer.textContent = 'Не получилось загрузить главы MangaDex.';
+    }
+}
+
+async function fetchMangaDexChapters(mangaDexId) {
+    const url = `/api/mangadex/chapters?mangaId=${encodeURIComponent(mangaDexId)}&lang=${encodeURIComponent(preferredLanguage)}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+        throw new Error(`MangaDex chapters request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return {
+        chapters: data.chapters || [],
+        error: data.error || ''
+    };
+}
+
+function renderMangaDexChapterButtons(container, chapters, error = '') {
+    container.innerHTML = '';
+
+    const title = document.createElement('p');
+    title.className = 'chapter-list-title';
+    title.textContent = error
+        ? `Не получилось загрузить главы MangaDex: ${error}`
+        : chapters.length > 0
+        ? `Найдено глав: ${chapters.length}`
+        : 'Главы на выбранном языке не найдены.';
+    container.appendChild(title);
+
+    if (error || chapters.length === 0) return;
+
+    const list = document.createElement('div');
+    list.className = 'chapter-buttons';
+
+    chapters.forEach(chapter => {
+        const link = document.createElement('a');
+        link.className = 'chapter-button';
+        link.href = chapter.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = getChapterButtonText(chapter);
+        list.appendChild(link);
+    });
+
+    container.appendChild(list);
+}
+
+function getOrCreateChaptersContainer(card) {
+    let container = card.querySelector('.chapter-list');
+
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'chapter-list';
+        card.appendChild(container);
+    }
+
+    return container;
+}
+
+function getMangaDexMangaId(manga) {
+    if (typeof manga.id === 'string' && manga.id.startsWith('mangadex:')) {
+        return manga.id.replace('mangadex:', '');
+    }
+
+    const mangaDexSource = (manga.sources || []).find(source => source.siteName === 'MangaDex');
+    if (!mangaDexSource) return '';
+
+    const match = String(mangaDexSource.url || '').match(/mangadex\.org\/title\/([^/?#]+)/);
+    return match ? match[1] : '';
+}
+
+function getChapterButtonText(chapter) {
+    const chapterNumber = chapter.chapter || '?';
+    return chapter.title ? `Глава ${chapterNumber}: ${chapter.title}` : `Глава ${chapterNumber}`;
 }
 
 // Собирает короткую строку под названием карточки:

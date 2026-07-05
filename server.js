@@ -44,6 +44,11 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        if (requestUrl.pathname === '/api/mangadex/chapters') {
+            await handleMangaDexChaptersRequest(requestUrl, res);
+            return;
+        }
+
         await serveStaticFile(requestUrl.pathname, res);
     } catch (error) {
         console.error(error);
@@ -85,6 +90,31 @@ async function handleDeepSearchRequest(requestUrl, res) {
 
     const result = await deepSearchAllSources(query, preferredLanguage);
     sendJson(res, 200, result);
+}
+
+// API endpoint: /api/mangadex/chapters?mangaId=...&lang=ru
+// Возвращает список глав MangaDex для выбранного языка перевода.
+async function handleMangaDexChaptersRequest(requestUrl, res) {
+    const mangaId = (requestUrl.searchParams.get('mangaId') || '').trim();
+    const languageParam = requestUrl.searchParams.get('lang');
+    const translatedLanguage = languageParam === null ? 'ru' : languageParam.trim().toLowerCase();
+
+    if (!mangaId) {
+        sendJson(res, 400, { error: 'MangaDex mangaId is required' });
+        return;
+    }
+
+    try {
+        const result = await getMangaDexChapters(mangaId, translatedLanguage);
+        sendJson(res, 200, result);
+    } catch (error) {
+        sendJson(res, 200, {
+            mangaId,
+            requestedLanguage: translatedLanguage,
+            chapters: [],
+            error: error.message
+        });
+    }
 }
 
 // Отдает index.html, script.js и style.css без отдельного frontend-сервера.
@@ -553,6 +583,85 @@ async function getMangaDexAggregate(mangaId, translatedLanguage) {
     }
 }
 
+async function getMangaDexChapters(mangaId, translatedLanguage) {
+    const chapters = await fetchAllMangaDexChapters(mangaId, translatedLanguage);
+    const uniqueChapters = uniqueMangaDexChapters(chapters);
+
+    return {
+        mangaId,
+        requestedLanguage: translatedLanguage,
+        chapters: uniqueChapters
+    };
+}
+
+async function fetchAllMangaDexChapters(mangaId, translatedLanguage) {
+    const limit = 100;
+    let offset = 0;
+    let total = 0;
+    const chapters = [];
+
+    do {
+        const url = new URL(`https://api.mangadex.org/manga/${mangaId}/feed`);
+        url.searchParams.set('limit', String(limit));
+        url.searchParams.set('offset', String(offset));
+        url.searchParams.set('order[chapter]', 'asc');
+        url.searchParams.set('order[volume]', 'asc');
+        url.searchParams.append('contentRating[]', 'safe');
+        url.searchParams.append('contentRating[]', 'suggestive');
+
+        if (translatedLanguage) {
+            url.searchParams.append('translatedLanguage[]', translatedLanguage);
+        }
+
+        const json = await fetchJson(url);
+        total = json.total || 0;
+        chapters.push(...(json.data || []).map(normalizeMangaDexChapter));
+        offset += limit;
+    } while (offset < total);
+
+    return chapters;
+}
+
+function normalizeMangaDexChapter(item) {
+    const attributes = item.attributes || {};
+    const chapter = attributes.chapter || '';
+    const title = attributes.title || '';
+
+    return {
+        id: item.id,
+        chapter,
+        title,
+        language: attributes.translatedLanguage || 'unknown',
+        readableAt: attributes.readableAt || null,
+        externalUrl: attributes.externalUrl || null,
+        url: attributes.externalUrl || `https://mangadex.org/chapter/${item.id}`
+    };
+}
+
+function uniqueMangaDexChapters(chapters) {
+    const map = new Map();
+
+    for (const chapter of chapters) {
+        const key = chapter.chapter || chapter.id;
+        const existing = map.get(key);
+
+        if (!existing || getChapterReadableTime(chapter) > getChapterReadableTime(existing)) {
+            map.set(key, chapter);
+        }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+        const chapterDiff = getChapterNumber(a.chapter) - getChapterNumber(b.chapter);
+        if (chapterDiff !== 0) return chapterDiff;
+        return String(a.chapter).localeCompare(String(b.chapter));
+    });
+}
+
+function getChapterReadableTime(chapter) {
+    const time = Date.parse(chapter.readableAt || '');
+    return Number.isFinite(time) ? time : 0;
+}
+
 async function fetchMangaDexAggregate(mangaId, translatedLanguage) {
     const url = new URL(`https://api.mangadex.org/manga/${mangaId}/aggregate`);
     if (translatedLanguage) {
@@ -801,4 +910,3 @@ function sendText(res, statusCode, text) {
     res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(text);
 }
-

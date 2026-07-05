@@ -33,10 +33,12 @@ manga_translation_using_ai/
 
 ├── backend/
 
+│   ├──server.js
+
+│   ├──package.json
+
 │
 
 ├── .gitignore
 
 └── README.md
-
-Нужно сделать обычный и глубокий поиск. Разобраться с backend и потом приступать к глубокому поиску.

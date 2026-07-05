@@ -109,6 +109,43 @@
     background: white;
 }
 
+.chapter-list {
+    grid-column: 1 / -1;
+    display: none;
+    border-top: 1px solid #e5eaf0;
+    padding-top: 12px;
+}
+
+.chapter-list-title {
+    margin: 0 0 10px;
+    color: #52606d;
+    font-size: 14px;
+}
+
+.chapter-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-height: 220px;
+    overflow: auto;
+}
+
+.chapter-button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    background: #eef2f7;
+    color: #1f2933;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.chapter-button:hover {
+    background: #d8e2ef;
+}
+
 .manga-cover {
     width: 112px;
     height: 160px;
