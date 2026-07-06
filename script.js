@@ -33,8 +33,8 @@ async function runSearch(mode) {
     setSearchButtonsDisabled(true);
 
     try {
-        const mangas = await fetchMangaSearch(query, mode);
-        renderSearchResults(mangas, query, mode);
+        const searchData = await fetchMangaSearch(query, mode);
+        renderSearchResults(searchData.results || [], query, mode, searchData);
     } catch (error) {
         console.error(error);
         setSearchStatus('Ошибка при поиске');
@@ -55,8 +55,7 @@ async function fetchMangaSearch(query, mode = 'normal') {
         throw new Error(`Search request failed: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data.results || [];
+    return await response.json();
 }
 
 // Меняет предпочтительный язык перевода.
@@ -102,9 +101,9 @@ function showSearchMessage(text) {
 
 // ОТРИСОВКА РЕЗУЛЬТАТОВ
 // Получает уже готовый массив манги и добавляет карточки в HTML.
-function renderSearchResults(mangas, query, mode = 'normal') {
+function renderSearchResults(mangas, query, mode = 'normal', searchData = {}) {
     const resultsList = document.getElementById('resultslist');
-    const titlePrefix = mode === 'deep' ? 'Результаты глубокого поиска' : 'Результаты поиска';
+    const titlePrefix = getSearchResultsTitlePrefix(mode, searchData);
 
     setSearchStatus(`${titlePrefix} для: "${query}"`);
     resultsList.innerHTML = '';
@@ -118,6 +117,19 @@ function renderSearchResults(mangas, query, mode = 'normal') {
         const card = createMangaCard(manga);
         resultsList.appendChild(card);
     });
+}
+
+// Для глубокого поиска backend возвращает aiSearch.used.
+// Если ИИ не использовался, явно показываем это в заголовке результатов.
+function getSearchResultsTitlePrefix(mode, searchData = {}) {
+    if (mode !== 'deep') {
+        return 'Результаты поиска';
+    }
+
+    const aiWasUsed = Boolean((searchData.aiSearch || {}).used);
+    return aiWasUsed
+        ? 'Результаты глубокого поиска'
+        : 'Результаты глубокого поиска (без использования ИИ)';
 }
 
 // Создает одну карточку манги.

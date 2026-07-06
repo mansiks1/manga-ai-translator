@@ -5,7 +5,7 @@ Local web app for searching manga across multiple sources and preparing AI-assis
 ## Current Features
 
 - Normal manga search.
-- Deep search using several query variants.
+- Deep search using rule-based query variants plus optional OpenAI-generated title aliases.
 - Preferred translation language selector: `RU`, `EN`, `JA`, `KO`, `ZH`, `All`.
 - Latest chapter lookup, primarily through MangaDex.
 - Manga cards with cover, description, sources, best source, and latest chapter.
@@ -34,6 +34,32 @@ http://localhost:3000
 ```
 
 The site needs the Node.js backend because browser JavaScript cannot reliably call all external APIs directly.
+
+## AI Deep Search
+
+Deep search works without an AI key, but if `OPENAI_API_KEY` is configured the backend asks OpenAI for extra manga title variants using a strict JSON schema:
+
+```json
+{
+  "queries": ["Sousou no Frieren", "Frieren Beyond Journey's End", "Frieren"]
+}
+```
+
+Create a local `.env` file:
+
+```txt
+OPENAI_API_KEY=sk-your-openai-api-key
+OPENAI_MODEL=gpt-4o-mini
+```
+
+Optional settings:
+
+```txt
+AI_SEARCH_TIMEOUT_MS=10000
+DEEP_SEARCH_QUERY_LIMIT=8
+```
+
+The model only generates search queries. Manga results are still verified through MangaDex, MangaUpdates, AniList, Jikan, and Kitsu.
 
 ## Project Structure
 
