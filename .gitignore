@@ -24,3 +24,25 @@ build/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Translation cache
+cache/
+translations/
+
+# Downloaded manga pages / OCR temp files
+downloads/
+tmp/
+temp/
+ocr-output/
+ocr-temp/
+
+# OCR / ML models
+models/
+*.onnx
+*.pdmodel
+*.pdiparams
+
+# Local runtime data
+*.sqlite
+*.sqlite3
+*.db
