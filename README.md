@@ -1,44 +1,68 @@
-# manga-ai-translator
+# Manga Search AI
 
-A web platform for searching manga across multiple websites and translating chapters using AI.
+Local web app for searching manga across multiple sources and preparing AI-assisted chapter translation.
 
-## Features
-- Search manga across multiple websites
-- Check latest available chapters
-- Read manga online
-- Translate manga pages using AI
-- OCR text recognition
+## Current Features
 
-## Tech Stack
-- HTML
-- CSS
-- JavaScript
-- Python
-- FastAPI
-- AI API
+- Normal manga search.
+- Deep search using several query variants.
+- Preferred translation language selector: `RU`, `EN`, `JA`, `KO`, `ZH`, `All`.
+- Latest chapter lookup, primarily through MangaDex.
+- Manga cards with cover, description, sources, best source, and latest chapter.
+- MangaDex chapter buttons for the future AI translation flow.
 
-manga_translation_using_ai/
+## Sources
 
-│
+- MangaDex
+- MangaUpdates
+- AniList
+- Jikan / MyAnimeList
+- Kitsu
 
-├── frontend/
+MangaUpdates is also used to discover official links such as Manga Plus, Shueisha, Viz, Naver, Kakao Page, and others when they are listed in the series description.
 
-│   ├── index.html
+## Run Locally
 
-│   ├── style.css
+```bash
+npm start
+```
 
-│   └── script.js
+Then open:
 
-│
+```txt
+http://localhost:3000
+```
 
-├── backend/
+The site needs the Node.js backend because browser JavaScript cannot reliably call all external APIs directly.
 
-│   ├──server.js
+## Project Structure
 
-│   ├──package.json
+```txt
+manga-ai-translator/
+  index.html
+  style.css
+  script.js
+  server.js
+  package.json
+  .gitignore
+  README.md
+```
 
-│
+## Planned AI Translation Flow
 
-├── .gitignore
+```txt
+ИИ-перевод button
+-> select MangaDex chapter
+-> fetch chapter pages
+-> run OCR
+-> translate recognized text with an AI model
+-> cache result
+-> show translated text near the manga page
+```
 
-└── README.md
+Recommended OCR stack:
+
+- `manga-ocr` for Japanese manga.
+- `PaddleOCR` for Chinese, Korean, English, and general multilingual OCR.
+
+API keys and secrets must stay on the backend in `.env`, never in `script.js`.
