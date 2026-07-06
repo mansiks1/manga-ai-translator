@@ -5,7 +5,7 @@ Local web app for searching manga across multiple sources and preparing AI-assis
 ## Current Features
 
 - Normal manga search.
-- Deep search using rule-based query variants plus optional OpenAI-generated title aliases.
+- Deep search using rule-based query variants plus optional Gemini/OpenAI title aliases.
 - Preferred translation language selector: `RU`, `EN`, `JA`, `KO`, `ZH`, `All`.
 - Latest chapter lookup, primarily through MangaDex.
 - Manga cards with cover, description, sources, best source, and latest chapter.
@@ -37,7 +37,7 @@ The site needs the Node.js backend because browser JavaScript cannot reliably ca
 
 ## AI Deep Search
 
-Deep search works without an AI key, but if `OPENAI_API_KEY` is configured the backend asks OpenAI for extra manga title variants using a strict JSON schema:
+Deep search works without an AI key, but if an AI provider key is configured the backend asks the model for extra manga title variants using a strict JSON schema:
 
 ```json
 {
@@ -46,6 +46,27 @@ Deep search works without an AI key, but if `OPENAI_API_KEY` is configured the b
 ```
 
 Create a local `.env` file:
+
+```txt
+AI_SEARCH_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.5-flash-lite
+```
+
+Provider options:
+
+```txt
+# Cheapest default for deep search.
+AI_SEARCH_PROVIDER=gemini
+
+# Use the existing OpenAI implementation.
+AI_SEARCH_PROVIDER=openai
+
+# Try Gemini first, then OpenAI if Gemini is unavailable or fails.
+AI_SEARCH_PROVIDER=auto
+```
+
+OpenAI fallback settings:
 
 ```txt
 OPENAI_API_KEY=sk-your-openai-api-key
