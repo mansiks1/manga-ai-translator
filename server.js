@@ -16,7 +16,7 @@ const USER_AGENT = 'manga-ai-translator/0.1 local-development';
 const AI_SEARCH_PROVIDER = normalizeAiSearchProvider(process.env.AI_SEARCH_PROVIDER || 'gemini');
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
-const GEMINI_INTERACTIONS_URL = process.env.GEMINI_INTERACTIONS_URL || 'https://generativelanguage.googleapis.com/v1beta/interactions';
+const GEMINI_GENERATE_CONTENT_BASE_URL = process.env.GEMINI_GENERATE_CONTENT_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENAI_RESPONSES_URL = process.env.OPENAI_RESPONSES_URL || 'https://api.openai.com/v1/responses';
@@ -33,6 +33,17 @@ const AI_SEARCH_QUERY_SCHEMA = {
     },
     required: ['queries'],
     additionalProperties: false
+};
+const GEMINI_AI_SEARCH_QUERY_SCHEMA = {
+    type: 'OBJECT',
+    properties: {
+        queries: {
+            type: 'ARRAY',
+            items: { type: 'STRING' }
+        }
+    },
+    required: ['queries'],
+    propertyOrdering: ['queries']
 };
 
 const STATIC_CONTENT_TYPES = {
@@ -605,15 +616,22 @@ async function generateAiSearchQueries(query, preferredLanguage, provider) {
 }
 
 // Просит Gemini сгенерировать только варианты названия манги.
-// response_format с JSON Schema заставляет модель вернуть объект { queries: [...] } без лишнего текста.
+// generationConfig.responseSchema заставляет модель вернуть объект { queries: [...] } без лишнего текста.
 async function generateGeminiSearchQueries(query, preferredLanguage) {
     const payload = {
-        model: GEMINI_MODEL,
-        input: getGeminiAiSearchInput(query, preferredLanguage),
-        response_format: {
-            type: 'text',
-            mime_type: 'application/json',
-            schema: AI_SEARCH_QUERY_SCHEMA
+        contents: [
+            {
+                role: 'user',
+                parts: [
+                    { text: getGeminiAiSearchInput(query, preferredLanguage) }
+                ]
+            }
+        ],
+        generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: GEMINI_AI_SEARCH_QUERY_SCHEMA,
+            temperature: 0.2,
+            maxOutputTokens: 300
         }
     };
 
@@ -694,8 +712,8 @@ function normalizeAiSearchProvider(provider) {
         : 'gemini';
 }
 
-// Gemini Interactions API принимает один input, поэтому инструкции и пользовательский
-// запрос упакованы вместе; JSON Schema ниже все равно ограничивает форму ответа.
+// Gemini generateContent принимает пользовательский prompt внутри contents.parts.
+// Инструкции и исходный запрос упакованы в один текст, а responseSchema ограничивает форму ответа.
 function getGeminiAiSearchInput(query, preferredLanguage) {
     return [
         getAiSearchInstructions(),
@@ -725,20 +743,19 @@ function getAiSearchInstructions() {
     ].join('\n');
 }
 
-// Отдельный HTTP-helper для Gemini Interactions API.
-// Ключ передается через x-goog-api-key, а тело запроса остается обычным JSON.
+// Отдельный HTTP-helper для Gemini generateContent API.
+// Используем стандартный endpoint /models/{model}:generateContent, чтобы получать candidates[].content.parts[].
 async function fetchGeminiJson(payload) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AI_SEARCH_TIMEOUT_MS);
 
     try {
-        const response = await fetch(GEMINI_INTERACTIONS_URL, {
+        const response = await fetch(getGeminiGenerateContentUrl(), {
             method: 'POST',
             signal: controller.signal,
             headers: {
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
-                'x-goog-api-key': GEMINI_API_KEY,
                 'User-Agent': USER_AGENT
             },
             body: JSON.stringify(payload)
@@ -755,6 +772,13 @@ async function fetchGeminiJson(payload) {
     }
 }
 
+function getGeminiGenerateContentUrl() {
+    const model = GEMINI_MODEL.replace(/^models\//, '');
+    const url = new URL(`${GEMINI_GENERATE_CONTENT_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`);
+    url.searchParams.set('key', GEMINI_API_KEY);
+    return url;
+}
+
 function formatGeminiError(response, responseText) {
     try {
         const json = JSON.parse(responseText);
@@ -765,24 +789,39 @@ function formatGeminiError(response, responseText) {
     }
 }
 
-// В Interactions API structured output приходит как output_text.
-// Дополнительные обходные варианты оставлены на случай небольших изменений формы ответа.
+// generateContent возвращает текст в candidates[].content.parts[].text.
+// output_text/output оставлены как запасной вариант, если провайдер позже унифицирует формат.
 function getGeminiResponseText(response) {
     if (typeof response.output_text === 'string' && response.output_text.trim()) {
         return response.output_text.trim();
     }
 
-    const candidateText = (response.output || [])
+    const candidateText = (response.candidates || [])
+        .flatMap(candidate => (((candidate || {}).content || {}).parts || []))
+        .map(part => part.text || '')
+        .join('')
+        .trim();
+
+    if (candidateText) {
+        return candidateText;
+    }
+
+    const fallbackText = (response.output || [])
         .flatMap(item => item.content || [])
         .map(content => content.text || content.output_text || '')
         .join('')
         .trim();
 
-    if (!candidateText) {
-        throw new Error('Gemini response did not contain text output');
+    if (fallbackText) {
+        return fallbackText;
     }
 
-    return candidateText;
+    const finishReasons = (response.candidates || [])
+        .map(candidate => candidate.finishReason)
+        .filter(Boolean)
+        .join(', ');
+    const reasonSuffix = finishReasons ? `; finishReason: ${finishReasons}` : '';
+    throw new Error(`Gemini response did not contain text output${reasonSuffix}`);
 }
 
 // Отдельный HTTP-helper для OpenAI: у него свой таймаут, чтобы AI-планировщик
