@@ -109,7 +109,8 @@
     background: white;
 }
 
-.chapter-list {
+.chapter-list,
+.source-list {
     grid-column: 1 / -1;
     display: none;
     border-top: 1px solid #e5eaf0;
@@ -144,6 +145,42 @@
 
 .chapter-button:hover {
     background: #d8e2ef;
+}
+
+.source-options {
+    display: grid;
+    gap: 8px;
+}
+
+.source-option {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-radius: 6px;
+    background: #f8fafc;
+}
+
+.source-option-info {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.source-option-info strong,
+.source-option-info span {
+    overflow-wrap: anywhere;
+}
+
+.source-option-info span {
+    color: #52606d;
+    font-size: 14px;
+}
+
+.source-open-link {
+    justify-content: center;
+    white-space: nowrap;
 }
 
 .manga-cover {
@@ -192,5 +229,13 @@
         width: 100%;
         height: auto;
         max-height: 360px;
+    }
+
+    .source-option {
+        grid-template-columns: 1fr;
+    }
+
+    .source-open-link {
+        width: fit-content;
     }
 }

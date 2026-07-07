@@ -114,7 +114,7 @@ function renderSearchResults(mangas, query, mode = 'normal', searchData = {}) {
     }
 
     mangas.forEach(manga => {
-        const card = createMangaCard(manga);
+        const card = createMangaCard(manga, mode);
         resultsList.appendChild(card);
     });
 }
@@ -133,8 +133,8 @@ function getSearchResultsTitlePrefix(mode, searchData = {}) {
 }
 
 // Создает одну карточку манги.
-// Здесь находятся кнопки "ИИ-перевод" и "Открыть источник".
-function createMangaCard(manga) {
+// В обычном поиске источник открывается сразу, в глубоком поиске можно выбрать источник из списка.
+function createMangaCard(manga, mode = 'normal') {
     const card = document.createElement('article');
     card.className = 'manga-card';
 
@@ -171,21 +171,110 @@ function createMangaCard(manga) {
         showMangaDexChapterButtons(manga, card);
     });
 
-    // Открывает лучший найденный источник. Сейчас это может быть сайт для чтения или каталог.
-    const originalButton = document.createElement('button');
-    originalButton.type = 'button';
-    originalButton.textContent = 'Открыть источник';
-    originalButton.disabled = !getBestUrl(manga);
-    originalButton.addEventListener('click', () => {
-        const url = getBestUrl(manga);
-        if (url) window.open(url, '_blank');
-    });
+    const sourceButton = mode === 'deep'
+        ? createSourcePickerButton(manga, card)
+        : createOpenSourceButton(manga);
 
-    buttons.append(translateButton, originalButton);
+    buttons.append(translateButton, sourceButton);
     content.append(title, meta, description, buttons);
     card.appendChild(content);
 
     return card;
+}
+
+function createSourcePickerButton(manga, card) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Выбрать источник';
+    button.disabled = getDisplaySources(manga).length === 0;
+    button.addEventListener('click', () => {
+        showMangaSourceOptions(manga, card);
+    });
+
+    return button;
+}
+
+function createOpenSourceButton(manga) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Открыть источник';
+    button.disabled = !getBestUrl(manga);
+    button.addEventListener('click', () => {
+        const url = getBestUrl(manga);
+        if (url) window.open(url, '_blank');
+    });
+
+    return button;
+}
+
+// Показывает под карточкой список источников в такой же раскрывающейся зоне,
+// как список глав для будущего ИИ-перевода.
+function showMangaSourceOptions(manga, card) {
+    const sourceContainer = getOrCreateSourceContainer(card);
+    const sources = getDisplaySources(manga);
+
+    hideCardPanel(card, '.chapter-list');
+    sourceContainer.style.display = 'block';
+    renderMangaSourceOptions(sourceContainer, sources);
+}
+
+function renderMangaSourceOptions(container, sources) {
+    container.innerHTML = '';
+
+    const title = document.createElement('p');
+    title.className = 'chapter-list-title';
+    title.textContent = sources.length > 0
+        ? `Найдено источников: ${sources.length}`
+        : 'Источники пока не найдены.';
+    container.appendChild(title);
+
+    if (sources.length === 0) return;
+
+    const list = document.createElement('div');
+    list.className = 'source-options';
+
+    sources.forEach(source => {
+        const row = document.createElement('div');
+        row.className = 'source-option';
+
+        const info = document.createElement('div');
+        info.className = 'source-option-info';
+
+        const name = document.createElement('strong');
+        name.textContent = source.isBest ? `${source.siteName} · лучший` : source.siteName;
+
+        const details = document.createElement('span');
+        details.textContent = getSourceDetailsText(source);
+
+        info.append(name, details);
+        row.appendChild(info);
+
+        if (source.url) {
+            const link = document.createElement('a');
+            link.className = 'chapter-button source-open-link';
+            link.href = source.url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = 'Открыть';
+            row.appendChild(link);
+        }
+
+        list.appendChild(row);
+    });
+
+    container.appendChild(list);
+}
+
+function getOrCreateSourceContainer(card) {
+    let container = card.querySelector('.source-list');
+
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'source-list';
+        card.appendChild(container);
+    }
+
+    return container;
 }
 
 // Первый шаг ИИ-перевода: показываем главы MangaDex как кнопки-ссылки.
@@ -194,6 +283,7 @@ async function showMangaDexChapterButtons(manga, card) {
     const chaptersContainer = getOrCreateChaptersContainer(card);
     const mangaDexId = getMangaDexMangaId(manga);
 
+    hideCardPanel(card, '.source-list');
     chaptersContainer.style.display = 'block';
     chaptersContainer.textContent = '';
 
@@ -271,6 +361,13 @@ function getOrCreateChaptersContainer(card) {
     return container;
 }
 
+function hideCardPanel(card, selector) {
+    const panel = card.querySelector(selector);
+    if (panel) {
+        panel.style.display = 'none';
+    }
+}
+
 function getMangaDexMangaId(manga) {
     if (typeof manga.id === 'string' && manga.id.startsWith('mangadex:')) {
         return manga.id.replace('mangadex:', '');
@@ -334,9 +431,106 @@ function getMangaMetaText(manga) {
     return parts.join(' | ') || 'Источник пока не определен';
 }
 
-// Возвращает ссылку, которую открывает кнопка "Открыть источник".
+// Возвращает ссылку, которую открывает кнопка обычного поиска.
 function getBestUrl(manga) {
     return (manga.bestSource && manga.bestSource.url) || manga.originalUrl || '';
+}
+
+// Собирает источники для панели выбора. Если backend дал только originalUrl,
+// показываем его как запасной источник, чтобы пользователь не терял ссылку.
+function getDisplaySources(manga) {
+    const bestSource = manga.bestSource || null;
+    const sources = (manga.sources || []).map(source => normalizeDisplaySource(source, bestSource));
+
+    if (manga.originalUrl && !sources.some(source => source.url === manga.originalUrl)) {
+        sources.push(normalizeDisplaySource({
+            siteName: 'Основной источник',
+            url: manga.originalUrl,
+            language: 'unknown',
+            latestChapter: manga.latestChapter || null,
+            chaptersCount: manga.chaptersCount || null,
+            type: 'catalog'
+        }, bestSource));
+    }
+
+    return uniqueDisplaySources(sources).sort(compareDisplaySources);
+}
+
+function normalizeDisplaySource(source, bestSource) {
+    const siteName = source.siteName || 'Неизвестный источник';
+
+    return {
+        siteName,
+        url: source.url || '',
+        language: source.language || 'unknown',
+        latestChapter: source.latestChapter || null,
+        chaptersCount: source.chaptersCount ?? null,
+        type: source.type || 'catalog',
+        isBest: Boolean(bestSource && source.siteName === bestSource.siteName && source.url === bestSource.url)
+    };
+}
+
+function uniqueDisplaySources(sources) {
+    const map = new Map();
+
+    sources.forEach(source => {
+        const key = source.url || `${source.siteName}:${source.type}:${source.language}`;
+        const existing = map.get(key);
+
+        if (!existing || compareDisplaySources(source, existing) < 0) {
+            map.set(key, source);
+        }
+    });
+
+    return Array.from(map.values());
+}
+
+function compareDisplaySources(a, b) {
+    if (a.isBest !== b.isBest) return a.isBest ? -1 : 1;
+
+    const typeDiff = getSourceTypePriority(b.type) - getSourceTypePriority(a.type);
+    if (typeDiff !== 0) return typeDiff;
+
+    return getChapterNumber(b.latestChapter) - getChapterNumber(a.latestChapter);
+}
+
+function getSourceTypePriority(type) {
+    const priorities = {
+        reader: 3,
+        official: 2,
+        catalog: 1
+    };
+
+    return priorities[type] || 0;
+}
+
+function getSourceDetailsText(source) {
+    const details = [
+        `Последняя глава: ${source.latestChapter || 'неизвестно'}`,
+        `Тип: ${getSourceTypeLabel(source.type)}`,
+        `Язык: ${getLanguageName(source.language)}`
+    ];
+
+    if (source.chaptersCount != null) {
+        details.push(`Глав: ${source.chaptersCount}`);
+    }
+
+    return details.join(' | ');
+}
+
+function getSourceTypeLabel(type) {
+    const labels = {
+        reader: 'читалка',
+        official: 'официальный',
+        catalog: 'каталог'
+    };
+
+    return labels[type] || type || 'неизвестно';
+}
+
+function getChapterNumber(value) {
+    const number = Number.parseFloat(value);
+    return Number.isFinite(number) ? number : 0;
 }
 
 // Нажатие на кнопку обычного поиска мышкой.
