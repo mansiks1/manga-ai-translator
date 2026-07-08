@@ -221,7 +221,11 @@ async function deepSearchAllSources(query, preferredLanguage) {
     const sourceErrors = batches.flatMap(batch => batch.sourceErrors || []);
     const rawResults = batches.flatMap(batch => batch.results || []);
     const mergedResults = mergeMangaResults(rawResults);
-    const sortedResults = sortMangasBySearchQueries(mergedResults, deepQueries)
+    const sortedResults = sortMangasBySearchQueries(mergedResults, {
+        queries: deepQueries,
+        originalQuery: query,
+        aiQueries
+    })
         .map(manga => prepareMangaResult(manga, preferredLanguage));
 
     return {
@@ -568,21 +572,65 @@ function sortMangasByRelevance(mangas, query) {
 }
 
 // Для глубокого поиска релевантность считаем по всем использованным запросам.
-// Например, пользователь ввел "вагабонд", а локальный fallback добавил "vagabond".
-function sortMangasBySearchQueries(mangas, queries) {
+// Для длинных фраз даем бонус коротким romaji/native/English вариантам от AI.
+function sortMangasBySearchQueries(mangas, searchContext) {
     return mangas.slice().sort((a, b) => {
-        const scoreDiff = getBestRelevanceScore(b, queries) - getBestRelevanceScore(a, queries);
+        const scoreDiff = getBestRelevanceScore(b, searchContext) - getBestRelevanceScore(a, searchContext);
         if (scoreDiff !== 0) return scoreDiff;
         return getChapterNumber(b.latestChapter) - getChapterNumber(a.latestChapter);
     });
 }
 
-function getBestRelevanceScore(manga, queries) {
+function getBestRelevanceScore(manga, searchContext) {
+    const queries = searchContext.queries || [];
+    const aiQuerySet = new Set(searchContext.aiQueries || []);
+    const shouldBoostAi = shouldBoostAiSearchQueries(searchContext.originalQuery);
+
     return queries.reduce((bestScore, query, index) => {
         const score = getRelevanceScore(manga, query);
+        const aiBoost = shouldBoostAi && aiQuerySet.has(query) && score > 0
+            ? getAiSearchQueryBoost(query)
+            : 0;
         // Небольшой штраф сохраняет приоритет более ранних запросов при одинаковом совпадении.
-        return Math.max(bestScore, score - index);
+        return Math.max(bestScore, score + aiBoost - index);
     }, 0);
+}
+
+function shouldBoostAiSearchQueries(originalQuery) {
+    return getSearchWordCount(originalQuery) > 5;
+}
+
+function getAiSearchQueryBoost(query) {
+    const normalizedQuery = normalizeSearchQuery(query);
+    const hasCyrillic = /[а-яё]/i.test(normalizedQuery);
+    const hasLatin = /[a-z]/i.test(normalizedQuery);
+    const hasNativeScript = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(normalizedQuery);
+    const wordCount = getSearchWordCount(normalizedQuery);
+
+    if (hasCyrillic || (!hasLatin && !hasNativeScript)) {
+        return 0;
+    }
+
+    if (hasNativeScript) {
+        return 70;
+    }
+
+    if (wordCount >= 9 && wordCount <= 26) {
+        return 80;
+    }
+
+    if (wordCount >= 3 && wordCount <= 8) {
+        return 30;
+    }
+
+    return 0;
+}
+
+function getSearchWordCount(value) {
+    return normalizeSearchQuery(value)
+        .split(/\s+/)
+        .filter(Boolean)
+        .length;
 }
 
 function searchDeepQueries(queries, preferredLanguage) {
@@ -935,8 +983,15 @@ function sanitizeAiQueries(queries) {
 
     return uniqueStrings(queries)
         .map(normalizeSearchQuery)
+        .map(stripSearchNoiseWords)
         .filter(value => value.length >= 3 && value.length <= 120)
         .slice(0, DEEP_SEARCH_QUERY_LIMIT);
+}
+
+function stripSearchNoiseWords(value) {
+    return normalizeSearchQuery(value)
+        .replace(/\s+(manga|manhwa|manhua|comic)$/i, '')
+        .trim();
 }
 
 // Старый rule-based генератор остается обязательным fallback:
