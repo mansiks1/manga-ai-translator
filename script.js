@@ -138,13 +138,7 @@ function createMangaCard(manga, mode = 'normal') {
     const card = document.createElement('article');
     card.className = 'manga-card';
 
-    if (manga.coverUrl) {
-        const cover = document.createElement('img');
-        cover.className = 'manga-cover';
-        cover.src = manga.coverUrl;
-        cover.alt = `Обложка ${manga.title}`;
-        card.appendChild(cover);
-    }
+    card.appendChild(createMangaCoverElement(manga));
 
     const content = document.createElement('div');
     content.className = 'manga-card-content';
@@ -180,6 +174,21 @@ function createMangaCard(manga, mode = 'normal') {
     card.appendChild(content);
 
     return card;
+}
+
+function createMangaCoverElement(manga) {
+    if (manga.coverUrl) {
+        const cover = document.createElement('img');
+        cover.className = 'manga-cover';
+        cover.src = manga.coverUrl;
+        cover.alt = `Обложка ${manga.title}`;
+        return cover;
+    }
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'manga-cover manga-cover-placeholder';
+    placeholder.setAttribute('aria-hidden', 'true');
+    return placeholder;
 }
 
 function createSourcePickerButton(manga, card) {
