@@ -179,6 +179,13 @@
     font-size: 14px;
 }
 
+.source-links {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .source-open-link {
     justify-content: center;
     white-space: nowrap;
@@ -250,6 +257,10 @@
 
     .source-option {
         grid-template-columns: 1fr;
+    }
+
+    .source-links {
+        justify-content: flex-start;
     }
 
     .source-open-link {

@@ -258,20 +258,41 @@ function renderMangaSourceOptions(container, sources) {
         info.append(name, details);
         row.appendChild(info);
 
-        if (source.url) {
-            const link = document.createElement('a');
-            link.className = 'chapter-button source-open-link';
-            link.href = source.url;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = 'Открыть';
-            row.appendChild(link);
+        const links = createSourceLinks(source);
+        if (links) {
+            row.appendChild(links);
         }
 
         list.appendChild(row);
     });
 
     container.appendChild(list);
+}
+
+function createSourceLinks(source) {
+    const links = document.createElement('div');
+    links.className = 'source-links';
+
+    if (source.url) {
+        links.appendChild(createSourceLink(source.url, 'Открыть'));
+    }
+
+    if (source.fallbackUrl && source.fallbackUrl !== source.url) {
+        links.appendChild(createSourceLink(source.fallbackUrl, 'Поиск'));
+    }
+
+    return links.childElementCount > 0 ? links : null;
+}
+
+function createSourceLink(url, text) {
+    const link = document.createElement('a');
+    link.className = 'chapter-button source-open-link';
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = text;
+
+    return link;
 }
 
 function getOrCreateSourceContainer(card) {
@@ -471,6 +492,7 @@ function normalizeDisplaySource(source, bestSource) {
     return {
         siteName,
         url: source.url || '',
+        fallbackUrl: source.fallbackUrl || '',
         language: source.language || 'unknown',
         latestChapter: source.latestChapter || null,
         chaptersCount: source.chaptersCount ?? null,

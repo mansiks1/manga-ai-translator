@@ -23,6 +23,11 @@ const OPENAI_RESPONSES_URL = process.env.OPENAI_RESPONSES_URL || 'https://api.op
 const AI_SEARCH_TIMEOUT_MS = Number(process.env.AI_SEARCH_TIMEOUT_MS) || 10000;
 const RULE_BASED_DEEP_SEARCH_QUERY_LIMIT = 6;
 const DEEP_SEARCH_QUERY_LIMIT = Number(process.env.DEEP_SEARCH_QUERY_LIMIT) || 8;
+const MANGALIB_ENABLED = parseEnvBoolean(process.env.MANGALIB_ENABLED, true);
+const MANGALIB_API_BASE_URL = process.env.MANGALIB_API_BASE_URL || 'https://api.cdnlibs.org/api';
+const MANGALIB_SITE_URL = process.env.MANGALIB_SITE_URL || 'https://mangalib.org';
+const MANGALIB_SITE_ID = process.env.MANGALIB_SITE_ID || '1';
+const MANGALIB_CHAPTER_LOOKUP_LIMIT = Number(process.env.MANGALIB_CHAPTER_LOOKUP_LIMIT) || 3;
 const AI_SEARCH_QUERY_SCHEMA = {
     type: 'object',
     properties: {
@@ -59,11 +64,14 @@ const STATIC_FILES = new Set(['/', '/index.html', '/style.css', '/script.js']);
 // Каждый адаптер должен вернуть данные в одном общем формате, чтобы frontend не зависел от конкретного API.
 const sourceAdapters = [
     { name: 'MangaDex', search: searchMangaDex },
+    ...(MANGALIB_ENABLED ? [{ name: 'MangaLib', search: searchMangaLib }] : []),
     { name: 'MangaUpdates', search: searchMangaUpdates },
     { name: 'AniList', search: searchAniList },
     { name: 'Jikan', search: searchJikan },
     { name: 'Kitsu', search: searchKitsu }
 ];
+
+const mangaLibChapterInfoCache = new Map();
 
 // Главный HTTP-сервер: отдает frontend-файлы и API для поиска.
 const server = http.createServer(async (req, res) => {
@@ -282,6 +290,137 @@ async function searchMangaDex(query, preferredLanguage) {
             ]
         };
     }));
+}
+
+// Источник MangaLib: русскоязычная читалка. API неофициальный, поэтому домены и включение
+// вынесены в .env, а ошибки этого адаптера не должны ломать остальные источники.
+async function searchMangaLib(query) {
+    const url = getMangaLibApiUrl('/manga');
+    url.searchParams.set('q', query);
+    url.searchParams.append('site_id[]', MANGALIB_SITE_ID);
+    url.searchParams.set('sort_by', 'rating_score');
+    url.searchParams.set('sort_type', 'desc');
+
+    const json = await fetchJson(url, { headers: getMangaLibHeaders() });
+    const items = (json.data || [])
+        .filter(item => String(item.site || MANGALIB_SITE_ID) === MANGALIB_SITE_ID)
+        .slice(0, SOURCE_LIMIT);
+
+    return Promise.all(items.map(async (item, index) => {
+        const chapterInfo = index < MANGALIB_CHAPTER_LOOKUP_LIMIT
+            ? await getMangaLibChapterInfoSafely(item.slug_url)
+            : { chaptersCount: null, latestChapter: null };
+
+        return normalizeMangaLibItem(item, chapterInfo);
+    }));
+}
+
+// Получает последнюю главу MangaLib отдельным запросом, потому что выдача каталога
+// содержит названия и обложки, но обычно не содержит счетчик глав.
+async function getMangaLibChapterInfoSafely(slugUrl) {
+    if (!slugUrl) {
+        return { chaptersCount: null, latestChapter: null };
+    }
+
+    try {
+        return await getMangaLibChapterInfo(slugUrl);
+    } catch {
+        return { chaptersCount: null, latestChapter: null };
+    }
+}
+
+// Кэширует список глав на время жизни сервера: глубокий поиск часто прогоняет
+// несколько похожих запросов, и без кэша один и тот же тайтл дергал бы MangaLib снова.
+async function getMangaLibChapterInfo(slugUrl) {
+    const cacheKey = String(slugUrl);
+
+    if (mangaLibChapterInfoCache.has(cacheKey)) {
+        return mangaLibChapterInfoCache.get(cacheKey);
+    }
+
+    const url = getMangaLibApiUrl(`/manga/${encodeURIComponent(cacheKey)}/chapters`);
+    const json = await fetchJson(url, { headers: getMangaLibHeaders() });
+    const chapters = json.data || [];
+    const chapterNumbers = chapters
+        .map(chapter => toNumber(chapter.number))
+        .filter(number => number !== null);
+    const latestChapter = chapterNumbers.length > 0
+        ? String(Math.max(...chapterNumbers))
+        : null;
+    const chapterInfo = {
+        chaptersCount: chapters.length || null,
+        latestChapter
+    };
+
+    mangaLibChapterInfoCache.set(cacheKey, chapterInfo);
+    return chapterInfo;
+}
+
+// Приводит ответ MangaLib к общему формату карточки, которым уже пользуются остальные источники.
+function normalizeMangaLibItem(item, chapterInfo) {
+    const title = item.rus_name || item.eng_name || item.name || 'Untitled';
+    const aliases = uniqueStrings([item.name, item.rus_name, item.eng_name, item.slug]);
+    const cover = item.cover || {};
+    const mangaUrl = getMangaLibMangaUrl(item.slug_url);
+    const fallbackUrl = getMangaLibSearchUrl(item);
+    const latestChapter = chapterInfo.latestChapter;
+    const chaptersCount = chapterInfo.chaptersCount;
+
+    return {
+        id: `mangalib:${item.id}`,
+        title,
+        aliases,
+        description: getMangaLibDescription(item),
+        coverUrl: cover.default || cover.md || cover.thumbnail || '',
+        chaptersCount,
+        latestChapter,
+        originalUrl: mangaUrl,
+        sources: [
+            {
+                siteName: 'MangaLib',
+                url: mangaUrl,
+                fallbackUrl,
+                language: 'ru',
+                chaptersCount,
+                latestChapter,
+                type: 'reader'
+            }
+        ]
+    };
+}
+
+function getMangaLibDescription(item) {
+    return [
+        ((item.type || {}).label),
+        ((item.status || {}).label),
+        item.releaseDateString
+    ].filter(Boolean).join(' · ');
+}
+
+function getMangaLibApiUrl(pathname) {
+    const baseUrl = MANGALIB_API_BASE_URL.replace(/\/+$/, '');
+    return new URL(`${baseUrl}${pathname}`);
+}
+
+function getMangaLibMangaUrl(slugUrl) {
+    return new URL(`/manga/${slugUrl}`, MANGALIB_SITE_URL).toString();
+}
+
+// Если прямой frontend-route MangaLib рисует 404, поисковая ссылка остается
+// запасным путем к тому же тайтлу внутри самого MangaLib.
+function getMangaLibSearchUrl(item) {
+    const url = new URL('/manga-list', MANGALIB_SITE_URL);
+    url.searchParams.set('search', item.rus_name || item.name || item.eng_name || item.slug || '');
+
+    return url.toString();
+}
+
+function getMangaLibHeaders() {
+    return {
+        Accept: 'application/json',
+        Origin: MANGALIB_SITE_URL,
+        Referer: `${MANGALIB_SITE_URL}/`
+    };
 }
 
 // Источник AniList: хороший каталог с обложками, описаниями и альтернативными названиями.
@@ -792,6 +931,14 @@ function normalizeAiSearchProvider(provider) {
     return ['gemini', 'openai', 'auto'].includes(normalizedProvider)
         ? normalizedProvider
         : 'gemini';
+}
+
+function parseEnvBoolean(value, fallback) {
+    if (value == null || value === '') {
+        return fallback;
+    }
+
+    return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 }
 
 // Gemini generateContent принимает пользовательский prompt внутри contents.parts.
