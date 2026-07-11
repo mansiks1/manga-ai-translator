@@ -38,7 +38,7 @@ async function runSearch(mode) {
     } catch (error) {
         console.error(error);
         setSearchStatus('Ошибка при поиске');
-        showSearchMessage('Не получилось получить данные. Проверь, запущен ли backend.');
+        showSearchMessage(getSearchErrorMessage(error));
     } finally {
         setSearchButtonsDisabled(false);
     }
@@ -50,12 +50,31 @@ async function fetchMangaSearch(query, mode = 'normal') {
     const endpoint = mode === 'deep' ? '/api/deep-search' : '/api/search';
     const url = `${endpoint}?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(preferredLanguage)}`;
     const response = await fetch(url);
+    const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-        throw new Error(`Search request failed: ${response.status}`);
+        const error = new Error((data && data.error) || `Search request failed: ${response.status}`);
+        error.status = response.status;
+        error.retryAfterSeconds = data && data.retryAfterSeconds;
+        throw error;
     }
 
-    return await response.json();
+    return data;
+}
+
+function getSearchErrorMessage(error) {
+    if (error.status === 429) {
+        const retryText = error.retryAfterSeconds
+            ? ` Попробуй снова через ${error.retryAfterSeconds} сек.`
+            : '';
+        return `Слишком много глубоких запросов.${retryText}`;
+    }
+
+    if (error.status === 400) {
+        return error.message || 'Проверь текст запроса.';
+    }
+
+    return 'Не получилось получить данные. Проверь, запущен ли backend.';
 }
 
 // Меняет предпочтительный язык перевода.

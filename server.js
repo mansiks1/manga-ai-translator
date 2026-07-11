@@ -23,6 +23,16 @@ const OPENAI_RESPONSES_URL = process.env.OPENAI_RESPONSES_URL || 'https://api.op
 const AI_SEARCH_TIMEOUT_MS = Number(process.env.AI_SEARCH_TIMEOUT_MS) || 10000;
 const RULE_BASED_DEEP_SEARCH_QUERY_LIMIT = 6;
 const DEEP_SEARCH_QUERY_LIMIT = Number(process.env.DEEP_SEARCH_QUERY_LIMIT) || 8;
+const MAX_SEARCH_QUERY_LENGTH = Number(process.env.MAX_SEARCH_QUERY_LENGTH) || 200;
+const MAX_DEEP_SEARCH_QUERY_LENGTH = Number(process.env.MAX_DEEP_SEARCH_QUERY_LENGTH) || 260;
+const SEARCH_CACHE_TTL_MS = Number(process.env.SEARCH_CACHE_TTL_MS) || 10 * 60 * 1000;
+const DEEP_SEARCH_CACHE_TTL_MS = Number(process.env.DEEP_SEARCH_CACHE_TTL_MS) || 60 * 60 * 1000;
+const AI_SEARCH_CACHE_TTL_MS = Number(process.env.AI_SEARCH_CACHE_TTL_MS) || 24 * 60 * 60 * 1000;
+const CACHE_MAX_ENTRIES = Number(process.env.CACHE_MAX_ENTRIES) || 300;
+const DEEP_SEARCH_RATE_LIMIT_WINDOW_MS = Number(process.env.DEEP_SEARCH_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
+const DEEP_SEARCH_RATE_LIMIT_MAX = Number(process.env.DEEP_SEARCH_RATE_LIMIT_MAX) || 8;
+const AI_SEARCH_RATE_LIMIT_WINDOW_MS = Number(process.env.AI_SEARCH_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
+const AI_SEARCH_RATE_LIMIT_MAX = Number(process.env.AI_SEARCH_RATE_LIMIT_MAX) || 4;
 const MANGALIB_ENABLED = parseEnvBoolean(process.env.MANGALIB_ENABLED, true);
 const MANGALIB_API_BASE_URL = process.env.MANGALIB_API_BASE_URL || 'https://api.cdnlibs.org/api';
 const MANGALIB_SITE_URL = process.env.MANGALIB_SITE_URL || 'https://mangalib.org';
@@ -72,6 +82,10 @@ const sourceAdapters = [
 ];
 
 const mangaLibChapterInfoCache = new Map();
+const searchResultCache = new Map();
+const deepSearchResultCache = new Map();
+const aiSearchPlanCache = new Map();
+const rateLimitBuckets = new Map();
 
 // Главный HTTP-сервер: отдает frontend-файлы и API для поиска.
 const server = http.createServer(async (req, res) => {
@@ -79,12 +93,12 @@ const server = http.createServer(async (req, res) => {
         const requestUrl = new URL(req.url, `http://${req.headers.host}`);
 
         if (requestUrl.pathname === '/api/search') {
-            await handleSearchRequest(requestUrl, res);
+            await handleSearchRequest(requestUrl, req, res);
             return;
         }
 
         if (requestUrl.pathname === '/api/deep-search') {
-            await handleDeepSearchRequest(requestUrl, res);
+            await handleDeepSearchRequest(requestUrl, req, res);
             return;
         }
 
@@ -106,13 +120,20 @@ server.listen(PORT, () => {
 
 // API endpoint: /api/search?q=название&lang=ru
 // Проверяет запрос пользователя и запускает поиск по всем источникам.
-async function handleSearchRequest(requestUrl, res) {
+async function handleSearchRequest(requestUrl, req, res) {
     const query = (requestUrl.searchParams.get('q') || '').trim();
     const languageParam = requestUrl.searchParams.get('lang');
     const preferredLanguage = languageParam === null ? 'ru' : languageParam.trim().toLowerCase();
 
     if (!query) {
         sendJson(res, 400, { error: 'Search query is required' });
+        return;
+    }
+
+    if (query.length > MAX_SEARCH_QUERY_LENGTH) {
+        sendJson(res, 400, {
+            error: `Search query is too long. Maximum length is ${MAX_SEARCH_QUERY_LENGTH} characters.`
+        });
         return;
     }
 
@@ -122,17 +143,47 @@ async function handleSearchRequest(requestUrl, res) {
 
 // API endpoint: /api/deep-search?q=название&lang=ru
 // Делает более широкий поиск: пробует несколько вариантов названия и объединяет результаты.
-async function handleDeepSearchRequest(requestUrl, res) {
+async function handleDeepSearchRequest(requestUrl, req, res) {
     const query = (requestUrl.searchParams.get('q') || '').trim();
     const languageParam = requestUrl.searchParams.get('lang');
     const preferredLanguage = languageParam === null ? 'ru' : languageParam.trim().toLowerCase();
+    const clientId = getClientId(req);
 
     if (!query) {
         sendJson(res, 400, { error: 'Search query is required' });
         return;
     }
 
-    const result = await deepSearchAllSources(query, preferredLanguage);
+    if (query.length > MAX_DEEP_SEARCH_QUERY_LENGTH) {
+        sendJson(res, 400, {
+            error: `Deep search query is too long. Maximum length is ${MAX_DEEP_SEARCH_QUERY_LENGTH} characters.`
+        });
+        return;
+    }
+
+    const cacheKey = getSearchCacheKey('deep', query, preferredLanguage);
+    const cachedResult = getCacheValue(deepSearchResultCache, cacheKey);
+    if (cachedResult) {
+        sendJson(res, 200, markCacheHit(cachedResult, 'deepSearch'));
+        return;
+    }
+
+    const rateLimit = consumeRateLimit('deep-search', clientId, {
+        limit: DEEP_SEARCH_RATE_LIMIT_MAX,
+        windowMs: DEEP_SEARCH_RATE_LIMIT_WINDOW_MS
+    });
+
+    if (!rateLimit.allowed) {
+        sendJson(res, 429, {
+            error: 'Deep search rate limit exceeded',
+            retryAfterSeconds: rateLimit.retryAfterSeconds
+        }, { 'Retry-After': String(rateLimit.retryAfterSeconds) });
+        return;
+    }
+
+    const result = await deepSearchAllSources(query, preferredLanguage, { clientId });
+    setCacheValue(deepSearchResultCache, cacheKey, result, DEEP_SEARCH_CACHE_TTL_MS);
+
     sendJson(res, 200, result);
 }
 
@@ -183,6 +234,12 @@ async function serveStaticFile(pathname, res) {
 // Параллельно опрашивает все источники, не падает полностью, если один сайт вернул ошибку,
 // затем объединяет одинаковые тайтлы и выбирает лучший источник для каждой манги.
 async function searchAllSources(query, preferredLanguage) {
+    const cacheKey = getSearchCacheKey('search', query, preferredLanguage);
+    const cachedResult = getCacheValue(searchResultCache, cacheKey);
+    if (cachedResult) {
+        return markCacheHit(cachedResult, 'search');
+    }
+
     const settled = await Promise.all(sourceAdapters.map(async adapter => {
         try {
             const results = await adapter.search(query, preferredLanguage);
@@ -201,21 +258,25 @@ async function searchAllSources(query, preferredLanguage) {
     const sortedResults = sortMangasByRelevance(mergedResults, query)
         .map(manga => prepareMangaResult(manga, preferredLanguage));
 
-    return {
+    const result = {
         query,
         preferredLanguage,
         results: sortedResults,
-        sourceErrors
+        sourceErrors,
+        cache: { search: false }
     };
+
+    setCacheValue(searchResultCache, cacheKey, result, SEARCH_CACHE_TTL_MS);
+    return cloneJson(result);
 }
 
 // ГЛУБОКИЙ ПОИСК
 // Расширенный поиск: сначала строит варианты названия через правила и ИИ,
 // затем прогоняет каждый вариант по тем же реальным источникам.
-async function deepSearchAllSources(query, preferredLanguage) {
+async function deepSearchAllSources(query, preferredLanguage, options = {}) {
     const ruleBasedQueries = getDeepSearchQueries(query);
     const ruleBasedSearchPromise = searchDeepQueries(ruleBasedQueries, preferredLanguage);
-    const aiPlanPromise = getAiDeepSearchPlan(query, preferredLanguage);
+    const aiPlanPromise = getAiDeepSearchPlan(query, preferredLanguage, options);
     const [ruleBasedBatches, aiPlan] = await Promise.all([ruleBasedSearchPromise, aiPlanPromise]);
     const aiSearch = aiPlan.aiSearch;
     const aiQueries = aiPlan.queries.filter(aiQuery => !ruleBasedQueries.includes(aiQuery));
@@ -243,7 +304,8 @@ async function deepSearchAllSources(query, preferredLanguage) {
         usedQueries: deepQueries,
         aiSearch,
         results: sortedResults,
-        sourceErrors: uniqueSourceErrors(sourceErrors)
+        sourceErrors: uniqueSourceErrors(sourceErrors),
+        cache: { deepSearch: false }
     };
 }
 
@@ -786,15 +848,45 @@ function getInitialAiSearchState() {
         requestedProvider: AI_SEARCH_PROVIDER,
         attemptedProviders: [],
         model: null,
+        queries: [],
+        cacheHit: false,
+        rateLimited: false,
+        retryAfterSeconds: null,
         error: null
     };
 }
 
 // Собирает AI-варианты глубокого поиска для каждого глубокого запроса.
 // Даже если локальные источники что-то нашли, это может быть нерелевантный шум.
-async function getAiDeepSearchPlan(query, preferredLanguage) {
+async function getAiDeepSearchPlan(query, preferredLanguage, options = {}) {
+    const cacheKey = getSearchCacheKey('ai-plan', query, preferredLanguage);
+    const cachedPlan = getCacheValue(aiSearchPlanCache, cacheKey);
+    if (cachedPlan) {
+        cachedPlan.aiSearch = {
+            ...cachedPlan.aiSearch,
+            cacheHit: true,
+            rateLimited: false,
+            retryAfterSeconds: null
+        };
+        return cachedPlan;
+    }
+
     const providerCandidates = getAiSearchProviderCandidates();
     const aiSearch = getInitialAiSearchState();
+
+    if (providerCandidates.length > 0) {
+        const rateLimit = consumeRateLimit('ai-search', options.clientId || 'anonymous', {
+            limit: AI_SEARCH_RATE_LIMIT_MAX,
+            windowMs: AI_SEARCH_RATE_LIMIT_WINDOW_MS
+        });
+
+        if (!rateLimit.allowed) {
+            aiSearch.rateLimited = true;
+            aiSearch.retryAfterSeconds = rateLimit.retryAfterSeconds;
+            aiSearch.error = `AI search rate limit exceeded. Try again in ${rateLimit.retryAfterSeconds} seconds.`;
+            return { queries: [], aiSearch };
+        }
+    }
 
     let aiQueries = [];
 
@@ -823,7 +915,13 @@ async function getAiDeepSearchPlan(query, preferredLanguage) {
         .filter(value => value.length >= 3)
         .slice(0, DEEP_SEARCH_QUERY_LIMIT);
 
-    return { queries, aiSearch };
+    const plan = { queries, aiSearch };
+
+    if (providerCandidates.length > 0 && !aiSearch.rateLimited && !aiSearch.error) {
+        setCacheValue(aiSearchPlanCache, cacheKey, plan, AI_SEARCH_CACHE_TTL_MS);
+    }
+
+    return cloneJson(plan);
 }
 
 // Выбирает конкретный AI-провайдер для генерации вариантов названия.
@@ -1474,6 +1572,124 @@ function getLanguageFromSourceLabel(label) {
     return match ? match[1] : 'unknown';
 }
 
+// Ключ клиента сейчас строим по IP. После добавления аккаунтов сюда можно подставить userId,
+// а IP оставить как дополнительную защиту от анонимной накрутки.
+function getClientId(req) {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const rawForwardedFor = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+    const forwardedIp = rawForwardedFor ? rawForwardedFor.split(',')[0].trim() : '';
+
+    return forwardedIp || req.socket.remoteAddress || 'anonymous';
+}
+
+// Простой fixed-window rate limit: достаточно для локального прототипа и дешевой защиты API.
+// В продакшене эту Map лучше заменить на Redis, чтобы лимиты работали между несколькими серверами.
+function consumeRateLimit(scope, clientId, options) {
+    const limit = Number(options.limit);
+    const windowMs = Number(options.windowMs);
+
+    if (!Number.isFinite(limit) || !Number.isFinite(windowMs) || limit <= 0 || windowMs <= 0) {
+        return { allowed: true, remaining: Number.POSITIVE_INFINITY, retryAfterSeconds: 0 };
+    }
+
+    const now = Date.now();
+    const key = `${scope}:${clientId}`;
+    let bucket = rateLimitBuckets.get(key);
+
+    if (!bucket || bucket.resetAt <= now) {
+        bucket = { count: 0, resetAt: now + windowMs };
+    }
+
+    bucket.count += 1;
+    rateLimitBuckets.set(key, bucket);
+    pruneRateLimitBuckets(now);
+
+    const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+
+    return {
+        allowed: bucket.count <= limit,
+        remaining: Math.max(0, limit - bucket.count),
+        retryAfterSeconds
+    };
+}
+
+function pruneRateLimitBuckets(now) {
+    if (rateLimitBuckets.size < CACHE_MAX_ENTRIES * 10) {
+        return;
+    }
+
+    for (const [key, bucket] of rateLimitBuckets.entries()) {
+        if (bucket.resetAt <= now) {
+            rateLimitBuckets.delete(key);
+        }
+    }
+}
+
+function getSearchCacheKey(scope, query, preferredLanguage) {
+    return [
+        scope,
+        preferredLanguage || 'all',
+        normalizeSearchQuery(query).toLowerCase()
+    ].join(':');
+}
+
+// Кладем в кэш копии объектов, чтобы последующие изменения результата не меняли сохраненное значение.
+function setCacheValue(cache, key, value, ttlMs) {
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+        return;
+    }
+
+    cache.set(key, {
+        expiresAt: Date.now() + ttlMs,
+        value: cloneJson(value)
+    });
+    pruneCache(cache);
+}
+
+function getCacheValue(cache, key) {
+    const cached = cache.get(key);
+
+    if (!cached) {
+        return null;
+    }
+
+    if (cached.expiresAt <= Date.now()) {
+        cache.delete(key);
+        return null;
+    }
+
+    return cloneJson(cached.value);
+}
+
+function pruneCache(cache) {
+    const now = Date.now();
+
+    for (const [key, cached] of cache.entries()) {
+        if (cached.expiresAt <= now) {
+            cache.delete(key);
+        }
+    }
+
+    while (cache.size > CACHE_MAX_ENTRIES) {
+        const oldestKey = cache.keys().next().value;
+        cache.delete(oldestKey);
+    }
+}
+
+function markCacheHit(result, cacheName) {
+    return {
+        ...result,
+        cache: {
+            ...(result.cache || {}),
+            [cacheName]: true
+        }
+    };
+}
+
+function cloneJson(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
 // Приводит поисковую строку к компактному виду перед отправкой во внешние API.
 function normalizeSearchQuery(value) {
     return String(value || '')
@@ -1658,8 +1874,11 @@ function stripEnvQuotes(value) {
     return value;
 }
 
-function sendJson(res, statusCode, data) {
-    res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+function sendJson(res, statusCode, data, extraHeaders = {}) {
+    res.writeHead(statusCode, {
+        'Content-Type': 'application/json; charset=utf-8',
+        ...extraHeaders
+    });
     res.end(JSON.stringify(data));
 }
 
