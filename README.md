@@ -113,3 +113,11 @@ Recommended OCR stack:
 - `PaddleOCR` for Chinese, Korean, English, and general multilingual OCR.
 
 API keys and secrets must stay on the backend in `.env`, never in `script.js`.
+
+## Production Planning
+
+See:
+
+- `docs/production-architecture.md`
+- `docs/billing-and-credits.md`
+- `docs/database-schema.sql`
