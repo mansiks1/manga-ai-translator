@@ -2,11 +2,20 @@
 const deepSearchButton = document.getElementById('deepSearchButton');
 const searchInput = document.getElementById('searchInput');
 const languageButtons = document.querySelectorAll('.language-option');
+const creditBalance = document.getElementById('creditBalance');
+const deepSearchPrice = document.getElementById('deepSearchPrice');
+const addCreditsButton = document.getElementById('addCreditsButton');
+const creditActivity = document.getElementById('creditActivity');
 
 // Предпочтительный язык перевода.
 // Сейчас влияет на последнюю главу MangaDex, позже будет использоваться для ИИ-перевода.
 let preferredLanguage = 'ru';
 let lastSearchMode = 'normal';
+let accountState = null;
+// Платный поиск включаем только после получения session cookie и баланса, иначе два
+// одновременных первых запроса могли бы создать для одного браузера разные сессии.
+let accountReady = false;
+let searchInProgress = false;
 
 // ПОИСК МАНГИ
 // Обычный поиск быстро обращается к backend и ищет по введенному названию.
@@ -29,14 +38,19 @@ async function runSearch(mode) {
     const isDeepSearch = mode === 'deep';
 
     setSearchStatus(`${isDeepSearch ? 'Идет глубокий поиск' : 'Идет поиск'} для: "${query}"`);
+    if (isDeepSearch) {
+        setCreditActivity('Проверяем стоимость запроса...');
+    }
     clearSearchResults();
     setSearchButtonsDisabled(true);
 
     try {
         const searchData = await fetchMangaSearch(query, mode);
+        updateAccountFromBilling(searchData.billing);
         renderSearchResults(searchData.results || [], query, mode, searchData);
     } catch (error) {
         console.error(error);
+        updateAccountFromSearchError(error);
         setSearchStatus('Ошибка при поиске');
         showSearchMessage(getSearchErrorMessage(error));
     } finally {
@@ -56,6 +70,8 @@ async function fetchMangaSearch(query, mode = 'normal') {
         const error = new Error((data && data.error) || `Search request failed: ${response.status}`);
         error.status = response.status;
         error.retryAfterSeconds = data && data.retryAfterSeconds;
+        error.requiredCredits = data && data.requiredCredits;
+        error.balance = data && data.balance;
         throw error;
     }
 
@@ -63,6 +79,12 @@ async function fetchMangaSearch(query, mode = 'normal') {
 }
 
 function getSearchErrorMessage(error) {
+    if (error.status === 402) {
+        const required = Number.isFinite(error.requiredCredits) ? error.requiredCredits : 1;
+        const balance = Number.isFinite(error.balance) ? error.balance : 0;
+        return `Недостаточно кредитов: нужно ${required}, на балансе ${balance}.`;
+    }
+
     if (error.status === 429) {
         const retryText = error.retryAfterSeconds
             ? ` Попробуй снова через ${error.retryAfterSeconds} сек.`
@@ -77,6 +99,120 @@ function getSearchErrorMessage(error) {
     return 'Не получилось получить данные. Проверь, запущен ли backend.';
 }
 
+// Загружает локального пользователя и цену платного действия. HttpOnly session cookie
+// создается backend и недоступна JavaScript, поэтому frontend хранит только показанные данные.
+async function loadAccountState() {
+    try {
+        const response = await fetch('/api/me');
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok || !data) {
+            throw new Error((data && data.error) || 'Account request failed');
+        }
+
+        renderAccountState(data);
+    } catch (error) {
+        console.error(error);
+        creditBalance.textContent = '—';
+        deepSearchPrice.textContent = '';
+        addCreditsButton.hidden = true;
+        setCreditActivity('Баланс временно недоступен.');
+    }
+}
+
+// Обновляет весь блок аккаунта из ответа /api/me или локального dev-пополнения.
+function renderAccountState(data) {
+    accountState = data;
+    accountReady = true;
+
+    const credits = Number((data.user || {}).credits);
+    const deepSearchCost = Number((data.pricing || {}).deepSearchCredits);
+    const devTopUp = data.devTopUp || {};
+
+    creditBalance.textContent = Number.isFinite(credits) ? String(credits) : '0';
+    deepSearchPrice.textContent = Number.isFinite(deepSearchCost)
+        ? `Глубокий поиск: ${deepSearchCost}`
+        : '';
+
+    addCreditsButton.hidden = !devTopUp.enabled;
+    addCreditsButton.textContent = Number.isFinite(Number(devTopUp.amount))
+        ? `Тестово +${devTopUp.amount}`
+        : 'Тестовое пополнение';
+    deepSearchButton.disabled = searchInProgress;
+}
+
+// Локальное пополнение позволяет проверить весь платный сценарий без подключения кассы.
+// В production соответствующий backend endpoint отключается автоматически.
+async function addDevelopmentCredits() {
+    addCreditsButton.disabled = true;
+    setCreditActivity('Пополняем тестовый баланс...');
+
+    try {
+        const response = await fetch('/api/dev/add-credits', { method: 'POST' });
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok || !data) {
+            throw new Error((data && data.error) || 'Credit top-up failed');
+        }
+
+        renderAccountState(data);
+        setCreditActivity('Тестовый баланс пополнен.');
+    } catch (error) {
+        console.error(error);
+        setCreditActivity('Не получилось пополнить тестовый баланс.');
+    } finally {
+        addCreditsButton.disabled = false;
+    }
+}
+
+// Backend возвращает billing отдельно от общего поискового результата. Так frontend
+// сразу показывает реальное списание, бесплатный кэш или возврат при техническом сбое.
+function updateAccountFromBilling(billing) {
+    if (!billing) return;
+
+    updateDisplayedCreditBalance(billing.balance);
+
+    if (billing.chargedCredits > 0) {
+        setCreditActivity(`Списано: ${billing.chargedCredits}.`);
+        return;
+    }
+
+    const messages = {
+        cache_hit: 'Списано: 0. Результат получен из кэша.',
+        shared_request: 'Списано: 0. Использован уже выполняющийся запрос.',
+        source_failure: 'Списано: 0. Источники не ответили, credit возвращен.'
+    };
+    setCreditActivity(messages[billing.reason] || 'Списано: 0.');
+}
+
+// После ошибки синхронизирует известный баланс, чтобы 402 сразу отображался
+// корректно и не требовал дополнительного запроса к /api/me.
+function updateAccountFromSearchError(error) {
+    if (Number.isFinite(error.balance)) {
+        updateDisplayedCreditBalance(error.balance);
+    }
+
+    if (error.status === 402) {
+        setCreditActivity('Недостаточно кредитов для нового глубокого поиска.');
+    }
+}
+
+// Меняет число в блоке баланса и локальную копию состояния аккаунта.
+function updateDisplayedCreditBalance(value) {
+    const credits = Number(value);
+    if (!Number.isFinite(credits)) return;
+
+    creditBalance.textContent = String(credits);
+    if (accountState && accountState.user) {
+        accountState.user.credits = credits;
+    }
+}
+
+// Пишет короткий результат последней операции в aria-live область баланса.
+function setCreditActivity(text) {
+    creditActivity.textContent = text;
+}
+
 // Меняет предпочтительный язык перевода.
 // Если результаты уже показаны, сразу повторяем поиск с тем же режимом.
 function setPreferredLanguage(language) {
@@ -87,15 +223,26 @@ function setPreferredLanguage(language) {
     });
 
     const results = document.getElementById('results');
-    if (results.style.display !== 'none' && searchInput.value.trim() !== '') {
+    if (
+        lastSearchMode === 'normal'
+        && results.style.display !== 'none'
+        && searchInput.value.trim() !== ''
+    ) {
         runSearch(lastSearchMode);
+    } else if (lastSearchMode === 'deep' && results.style.display !== 'none') {
+        setCreditActivity('Язык изменен. Повторный глубокий поиск запускается отдельно.');
     }
 }
 
-// Блокирует кнопки поиска, пока backend еще отвечает.
+// Блокирует поиск и смену языка, пока backend еще отвечает, чтобы один жест
+// пользователя случайно не создал несколько платных глубоких запросов.
 function setSearchButtonsDisabled(disabled) {
+    searchInProgress = disabled;
     searchButton.disabled = disabled;
-    deepSearchButton.disabled = disabled;
+    deepSearchButton.disabled = disabled || !accountReady;
+    languageButtons.forEach(button => {
+        button.disabled = disabled;
+    });
 }
 
 // Общая функция для статуса поиска: "Идет поиск", "Результаты поиска", "Ошибка".
@@ -589,6 +736,9 @@ searchButton.addEventListener('click', searchManga);
 // Нажатие на кнопку глубокого поиска мышкой.
 deepSearchButton.addEventListener('click', deepSearchManga);
 
+// Тестовое пополнение показывается только когда backend разрешил dev-режим.
+addCreditsButton.addEventListener('click', addDevelopmentCredits);
+
 // Нажатие Enter в поле поиска запускает обычный поиск.
 searchInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
@@ -602,3 +752,6 @@ languageButtons.forEach(button => {
         setPreferredLanguage(button.dataset.language);
     });
 });
+
+// При открытии страницы сразу получаем локальную сессию и актуальный баланс.
+loadAccountState();

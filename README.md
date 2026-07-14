@@ -10,10 +10,14 @@ Local web app for searching manga across multiple sources and preparing AI-assis
 - Latest chapter lookup, primarily through MangaDex.
 - Manga cards with cover, description, sources, best source, and latest chapter.
 - MangaDex chapter buttons for the future AI translation flow.
+- Local cookie session with credits for testing paid deep search.
+- Optional PostgreSQL persistence for users, sessions, and the credit ledger.
+- Free cache hits, IP rate limits, and automatic credit refunds on total source failure.
 
 ## Sources
 
 - MangaDex
+- MangaLib
 - MangaUpdates
 - AniList
 - Jikan / MyAnimeList
@@ -24,7 +28,7 @@ MangaUpdates is also used to discover official links such as Manga Plus, Shueish
 ## Run Locally
 
 ```bash
-npm start
+npm.cmd start
 ```
 
 Then open:
@@ -82,6 +86,36 @@ DEEP_SEARCH_QUERY_LIMIT=8
 
 The model only generates search queries. Manga results are still verified through MangaDex, MangaUpdates, AniList, Jikan, and Kitsu.
 
+## Local Credits Prototype
+
+The browser receives a temporary server-side account through an HttpOnly cookie. Locally it starts with 3 credits, and a successful deep search that was not served from cache costs 1 credit. Use the `Тестово +10` button to test replenishment.
+
+```txt
+INITIAL_USER_CREDITS=3
+DEEP_SEARCH_CREDIT_COST=1
+DEV_CREDIT_TOP_UP_ENABLED=true
+DEV_CREDIT_TOP_UP_AMOUNT=10
+```
+
+Without `DATABASE_URL`, the balance and append-only ledger live in memory and reset when the server restarts. In `NODE_ENV=production`, the initial balance is forced to 0 and the development replenishment endpoint is disabled even if local env values were copied.
+
+## PostgreSQL Storage
+
+Set a PostgreSQL connection string to persist anonymous users, hashed browser sessions, balances, and ledger entries:
+
+```txt
+DATABASE_URL=postgresql://postgres:password@localhost:5432/manga_ai_translator
+```
+
+Apply migrations once, then use the usual start command:
+
+```powershell
+npm.cmd run db:migrate
+npm.cmd start
+```
+
+The server checks the schema before opening its port and prints `Account storage: postgres` when persistence is active. Without `DATABASE_URL`, it prints `Account storage: memory`. Registration and login are still required before accepting real payments.
+
 ## Project Structure
 
 ```txt
@@ -90,6 +124,12 @@ manga-ai-translator/
   style.css
   script.js
   server.js
+  lib/
+    account-store.js
+    env.js
+  db/migrations/
+  scripts/migrate.js
+  test/
   package.json
   .gitignore
   README.md
@@ -120,4 +160,4 @@ See:
 
 - `docs/production-architecture.md`
 - `docs/billing-and-credits.md`
-- `docs/database-schema.sql`
+- `db/migrations/001_accounts_and_billing.sql`

@@ -3,11 +3,20 @@
 
 CREATE TABLE users (
     id UUID PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE,
     password_hash TEXT,
     credits_balance INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE user_sessions (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE payments (
@@ -68,3 +77,6 @@ CREATE TABLE translation_jobs (
 CREATE INDEX usage_events_user_created_idx ON usage_events(user_id, created_at DESC);
 CREATE INDEX usage_events_ip_created_idx ON usage_events(ip_hash, created_at DESC);
 CREATE INDEX translation_jobs_user_created_idx ON translation_jobs(user_id, created_at DESC);
+
+-- Executable, versioned schema:
+-- db/migrations/001_accounts_and_billing.sql

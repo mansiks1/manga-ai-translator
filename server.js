@@ -1,7 +1,9 @@
 ﻿const http = require('node:http');
-const fsSync = require('node:fs');
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { createAccountStore, InsufficientCreditsError } = require('./lib/account-store');
+const { loadEnvFile } = require('./lib/env');
 
 const PUBLIC_DIR = __dirname;
 
@@ -33,6 +35,16 @@ const DEEP_SEARCH_RATE_LIMIT_WINDOW_MS = Number(process.env.DEEP_SEARCH_RATE_LIM
 const DEEP_SEARCH_RATE_LIMIT_MAX = Number(process.env.DEEP_SEARCH_RATE_LIMIT_MAX) || 8;
 const AI_SEARCH_RATE_LIMIT_WINDOW_MS = Number(process.env.AI_SEARCH_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
 const AI_SEARCH_RATE_LIMIT_MAX = Number(process.env.AI_SEARCH_RATE_LIMIT_MAX) || 4;
+const INITIAL_USER_CREDITS = process.env.NODE_ENV === 'production'
+    ? 0
+    : getEnvInteger(process.env.INITIAL_USER_CREDITS, 3, { min: 0 });
+const DEEP_SEARCH_CREDIT_COST = getEnvInteger(process.env.DEEP_SEARCH_CREDIT_COST, 1, { min: 1 });
+const DEV_CREDIT_TOP_UP_AMOUNT = getEnvInteger(process.env.DEV_CREDIT_TOP_UP_AMOUNT, 10, { min: 1, max: 1000 });
+const DEV_CREDIT_TOP_UP_ENABLED = process.env.NODE_ENV !== 'production'
+    && parseEnvBoolean(process.env.DEV_CREDIT_TOP_UP_ENABLED, true);
+const SESSION_COOKIE_NAME = 'manga_session';
+const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const DATABASE_URL = process.env.DATABASE_URL || '';
 const MANGALIB_ENABLED = parseEnvBoolean(process.env.MANGALIB_ENABLED, true);
 const MANGALIB_API_BASE_URL = process.env.MANGALIB_API_BASE_URL || 'https://api.cdnlibs.org/api';
 const MANGALIB_SITE_URL = process.env.MANGALIB_SITE_URL || 'https://mangalib.org';
@@ -61,6 +73,8 @@ const GEMINI_AI_SEARCH_QUERY_SCHEMA = {
     propertyOrdering: ['queries']
 };
 
+const accountStore = createAccountStore({ databaseUrl: DATABASE_URL });
+
 const STATIC_CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
@@ -86,11 +100,22 @@ const searchResultCache = new Map();
 const deepSearchResultCache = new Map();
 const aiSearchPlanCache = new Map();
 const rateLimitBuckets = new Map();
+const deepSearchInFlight = new Map();
 
 // Главный HTTP-сервер: отдает frontend-файлы и API для поиска.
 const server = http.createServer(async (req, res) => {
     try {
         const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+
+        if (requestUrl.pathname === '/api/me') {
+            await handleMeRequest(req, res);
+            return;
+        }
+
+        if (requestUrl.pathname === '/api/dev/add-credits') {
+            await handleDevAddCreditsRequest(req, res);
+            return;
+        }
 
         if (requestUrl.pathname === '/api/search') {
             await handleSearchRequest(requestUrl, req, res);
@@ -114,9 +139,59 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-server.listen(PORT, () => {
-    console.log(`Server is running: http://localhost:${PORT}`);
+// До открытия порта проверяет выбранное хранилище. При неверном DATABASE_URL или
+// непримененной миграции сервер завершится сразу, а не начнет терять операции credits.
+async function startServer() {
+    await accountStore.initialize();
+    server.listen(PORT, () => {
+        console.log(`Server is running: http://localhost:${PORT}`);
+        console.log(`Account storage: ${accountStore.kind}`);
+    });
+}
+
+startServer().catch(async error => {
+    console.error(`Server startup failed: ${error.message}`);
+    await accountStore.close().catch(() => {});
+    process.exitCode = 1;
 });
+
+// API endpoint: GET /api/me
+// Создает локальную cookie-сессию при первом обращении и возвращает только безопасную
+// для frontend часть пользователя: id, баланс и цену глубокого поиска.
+async function handleMeRequest(req, res) {
+    if (req.method !== 'GET') {
+        sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET' });
+        return;
+    }
+
+    const user = await getOrCreateSessionUser(req, res);
+    sendJson(res, 200, getAccountPayload(user));
+}
+
+// API endpoint: POST /api/dev/add-credits
+// Нужен только для локальной проверки платного сценария. В production обработчик
+// автоматически отключен, чтобы credits мог выдавать лишь проверенный платежный webhook.
+async function handleDevAddCreditsRequest(req, res) {
+    if (!DEV_CREDIT_TOP_UP_ENABLED) {
+        sendJson(res, 404, { error: 'Not found' });
+        return;
+    }
+
+    if (req.method !== 'POST') {
+        sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'POST' });
+        return;
+    }
+
+    let user = await getOrCreateSessionUser(req, res);
+    const creditChange = await applyCreditChange(user, DEV_CREDIT_TOP_UP_AMOUNT, {
+        reason: 'dev_top_up',
+        referenceType: 'development',
+        idempotencyKey: `dev_top_up:${crypto.randomUUID()}`
+    });
+    user = creditChange.user;
+
+    sendJson(res, 200, getAccountPayload(user));
+}
 
 // API endpoint: /api/search?q=название&lang=ru
 // Проверяет запрос пользователя и запускает поиск по всем источникам.
@@ -147,7 +222,6 @@ async function handleDeepSearchRequest(requestUrl, req, res) {
     const query = (requestUrl.searchParams.get('q') || '').trim();
     const languageParam = requestUrl.searchParams.get('lang');
     const preferredLanguage = languageParam === null ? 'ru' : languageParam.trim().toLowerCase();
-    const clientId = getClientId(req);
 
     if (!query) {
         sendJson(res, 400, { error: 'Search query is required' });
@@ -161,10 +235,29 @@ async function handleDeepSearchRequest(requestUrl, req, res) {
         return;
     }
 
+    let user = await getOrCreateSessionUser(req, res);
+    const clientId = getClientId(req);
     const cacheKey = getSearchCacheKey('deep', query, preferredLanguage);
     const cachedResult = getCacheValue(deepSearchResultCache, cacheKey);
     if (cachedResult) {
-        sendJson(res, 200, markCacheHit(cachedResult, 'deepSearch'));
+        sendJson(res, 200, withDeepSearchBilling(
+            markCacheHit(cachedResult, 'deepSearch'),
+            user,
+            { chargedCredits: 0, cacheHit: true, reason: 'cache_hit' }
+        ));
+        return;
+    }
+
+    // Одинаковые одновременные запросы используют одно вычисление. Пользователь, который
+    // присоединился к уже запущенному поиску, не платит второй раз за ту же работу.
+    const inFlightSearch = deepSearchInFlight.get(cacheKey);
+    if (inFlightSearch) {
+        const result = await inFlightSearch;
+        sendJson(res, 200, withDeepSearchBilling(
+            markCacheHit(result, 'deepSearch'),
+            user,
+            { chargedCredits: 0, cacheHit: true, reason: 'shared_request' }
+        ));
         return;
     }
 
@@ -181,10 +274,83 @@ async function handleDeepSearchRequest(requestUrl, req, res) {
         return;
     }
 
-    const result = await deepSearchAllSources(query, preferredLanguage, { clientId });
-    setCacheValue(deepSearchResultCache, cacheKey, result, DEEP_SEARCH_CACHE_TTL_MS);
+    if (user.credits < DEEP_SEARCH_CREDIT_COST) {
+        sendJson(res, 402, {
+            error: 'Insufficient credits',
+            requiredCredits: DEEP_SEARCH_CREDIT_COST,
+            balance: user.credits
+        });
+        return;
+    }
 
-    sendJson(res, 200, result);
+    const usageId = crypto.randomUUID();
+    try {
+        const charge = await applyCreditChange(user, -DEEP_SEARCH_CREDIT_COST, {
+            reason: 'deep_search',
+            referenceType: 'deep_search',
+            referenceId: usageId,
+            idempotencyKey: `deep_search:${usageId}:charge`
+        });
+        user = charge.user;
+    } catch (error) {
+        if (error instanceof InsufficientCreditsError || error.code === 'INSUFFICIENT_CREDITS') {
+            sendJson(res, 402, {
+                error: 'Insufficient credits',
+                requiredCredits: DEEP_SEARCH_CREDIT_COST,
+                balance: error.balance
+            });
+            return;
+        }
+
+        throw error;
+    }
+
+    const searchPromise = deepSearchAllSources(query, preferredLanguage, { clientId });
+    deepSearchInFlight.set(cacheKey, searchPromise);
+
+    try {
+        const result = await searchPromise;
+
+        // Если ни один внешний источник не ответил успешно, поиск считаем технически
+        // не выполненным: возвращаем зарезервированный credit и не сохраняем сбой в кэш.
+        if (!isBillableDeepSearchResult(result)) {
+            const refund = await applyCreditChange(user, DEEP_SEARCH_CREDIT_COST, {
+                reason: 'deep_search_refund',
+                referenceType: 'deep_search',
+                referenceId: usageId,
+                idempotencyKey: `deep_search:${usageId}:refund`
+            });
+            user = refund.user;
+
+            sendJson(res, 200, withDeepSearchBilling(result, user, {
+                chargedCredits: 0,
+                cacheHit: false,
+                reason: 'source_failure'
+            }));
+            return;
+        }
+
+        setCacheValue(deepSearchResultCache, cacheKey, result, DEEP_SEARCH_CACHE_TTL_MS);
+
+        sendJson(res, 200, withDeepSearchBilling(result, user, {
+            chargedCredits: DEEP_SEARCH_CREDIT_COST,
+            cacheHit: false,
+            reason: 'completed'
+        }));
+    } catch (error) {
+        const refund = await applyCreditChange(user, DEEP_SEARCH_CREDIT_COST, {
+            reason: 'deep_search_refund',
+            referenceType: 'deep_search',
+            referenceId: usageId,
+            idempotencyKey: `deep_search:${usageId}:refund`
+        });
+        user = refund.user;
+        throw error;
+    } finally {
+        if (deepSearchInFlight.get(cacheKey) === searchPromise) {
+            deepSearchInFlight.delete(cacheKey);
+        }
+    }
 }
 
 // API endpoint: /api/mangadex/chapters?mangaId=...&lang=ru
@@ -252,6 +418,7 @@ async function searchAllSources(query, preferredLanguage) {
     const sourceErrors = settled
         .filter(item => item.error)
         .map(item => ({ source: item.source, error: item.error }));
+    const successfulSourceRequests = settled.filter(item => !item.error).length;
 
     const rawResults = settled.flatMap(item => item.results);
     const mergedResults = mergeMangaResults(rawResults);
@@ -263,6 +430,11 @@ async function searchAllSources(query, preferredLanguage) {
         preferredLanguage,
         results: sortedResults,
         sourceErrors,
+        sourceStats: {
+            attempted: settled.length,
+            successful: successfulSourceRequests,
+            failed: settled.length - successfulSourceRequests
+        },
         cache: { search: false }
     };
 
@@ -288,6 +460,13 @@ async function deepSearchAllSources(query, preferredLanguage, options = {}) {
     const batches = [...ruleBasedBatches, ...aiBatches];
 
     const sourceErrors = batches.flatMap(batch => batch.sourceErrors || []);
+    const sourceStats = batches.reduce((stats, batch) => {
+        const batchStats = batch.sourceStats || {};
+        stats.attempted += Number(batchStats.attempted) || 0;
+        stats.successful += Number(batchStats.successful) || 0;
+        stats.failed += Number(batchStats.failed) || 0;
+        return stats;
+    }, { attempted: 0, successful: 0, failed: 0 });
     const rawResults = batches.flatMap(batch => batch.results || []);
     const mergedResults = mergeMangaResults(rawResults);
     const sortedResults = sortMangasBySearchQueries(mergedResults, {
@@ -305,6 +484,7 @@ async function deepSearchAllSources(query, preferredLanguage, options = {}) {
         aiSearch,
         results: sortedResults,
         sourceErrors: uniqueSourceErrors(sourceErrors),
+        sourceStats,
         cache: { deepSearch: false }
     };
 }
@@ -1039,6 +1219,24 @@ function parseEnvBoolean(value, fallback) {
     return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 }
 
+// Читает целочисленные настройки так, чтобы ошибочное значение из .env не могло
+// создать отрицательную цену, баланс или слишком большое тестовое пополнение.
+function getEnvInteger(value, fallback, limits = {}) {
+    if (value == null || String(value).trim() === '') {
+        return fallback;
+    }
+
+    const parsedValue = Number(value);
+    const min = Number.isFinite(limits.min) ? limits.min : Number.MIN_SAFE_INTEGER;
+    const max = Number.isFinite(limits.max) ? limits.max : Number.MAX_SAFE_INTEGER;
+
+    if (!Number.isInteger(parsedValue) || parsedValue < min || parsedValue > max) {
+        return fallback;
+    }
+
+    return parsedValue;
+}
+
 // Gemini generateContent принимает пользовательский prompt внутри contents.parts.
 // Инструкции и исходный запрос упакованы в один текст, а responseSchema ограничивает форму ответа.
 function getGeminiAiSearchInput(query, preferredLanguage) {
@@ -1582,6 +1780,127 @@ function getClientId(req) {
     return forwardedIp || req.socket.remoteAddress || 'anonymous';
 }
 
+// Возвращает пользователя текущего браузера по случайному токену из HttpOnly cookie.
+// В PostgreSQL и памяти хранится только SHA-256 хэш, а исходный токен остается у браузера.
+async function getOrCreateSessionUser(req, res) {
+    const cookies = parseCookieHeader(req.headers.cookie);
+    const sessionToken = cookies[SESSION_COOKIE_NAME];
+    const validSessionToken = isValidSessionToken(sessionToken) ? sessionToken : null;
+    let user = validSessionToken
+        ? await accountStore.findUserBySession(hashSessionToken(validSessionToken))
+        : null;
+
+    if (!user) {
+        const newSessionToken = crypto.randomBytes(32).toString('base64url');
+        user = await accountStore.createSessionUser({
+            userId: crypto.randomUUID(),
+            sessionHash: hashSessionToken(newSessionToken),
+            expiresAt: new Date(Date.now() + SESSION_COOKIE_MAX_AGE_SECONDS * 1000).toISOString(),
+            initialCredits: INITIAL_USER_CREDITS
+        });
+        setSessionCookie(req, res, newSessionToken);
+    }
+
+    return user;
+}
+
+// Отбрасывает слишком короткие и поврежденные значения до обращения к хранилищу.
+function isValidSessionToken(value) {
+    return /^[A-Za-z0-9_-]{20,200}$/.test(String(value || ''));
+}
+
+// Односторонний хэш позволяет искать сессию, не сохраняя пригодный для входа токен.
+function hashSessionToken(sessionToken) {
+    return crypto.createHash('sha256').update(sessionToken).digest('hex');
+}
+
+// Cookie содержит только случайный идентификатор. Баланс и журнал credits остаются на сервере.
+function setSessionCookie(req, res, sessionId) {
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const isSecure = Boolean(req.socket.encrypted) || forwardedProto === 'https';
+    const secureAttribute = isSecure ? '; Secure' : '';
+
+    res.setHeader('Set-Cookie', [
+        `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}`,
+        'Path=/',
+        'HttpOnly',
+        'SameSite=Lax',
+        `Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}${secureAttribute}`
+    ].join('; '));
+}
+
+// Разбирает стандартный Cookie header в объект и не ломает запрос из-за
+// поврежденного percent-encoding в одной из сторонних cookie.
+function parseCookieHeader(cookieHeader) {
+    const cookies = {};
+
+    for (const part of String(cookieHeader || '').split(';')) {
+        const separatorIndex = part.indexOf('=');
+        if (separatorIndex === -1) continue;
+
+        const name = part.slice(0, separatorIndex).trim();
+        const rawValue = part.slice(separatorIndex + 1).trim();
+        if (!name) continue;
+
+        try {
+            cookies[name] = decodeURIComponent(rawValue);
+        } catch {
+            cookies[name] = rawValue;
+        }
+    }
+
+    return cookies;
+}
+
+// Все изменения баланса проходят через accountStore и append-only credit ledger.
+// Для PostgreSQL проверка баланса и запись журнала выполняются одной транзакцией.
+async function applyCreditChange(user, delta, details = {}) {
+    return accountStore.changeCredits(user.id, delta, details);
+}
+
+// Собирает единый публичный ответ для загрузки аккаунта и dev-пополнения.
+function getAccountPayload(user) {
+    return {
+        user: {
+            id: user.id,
+            credits: user.credits,
+            createdAt: user.createdAt
+        },
+        pricing: {
+            deepSearchCredits: DEEP_SEARCH_CREDIT_COST
+        },
+        devTopUp: {
+            enabled: DEV_CREDIT_TOP_UP_ENABLED,
+            amount: DEV_CREDIT_TOP_UP_AMOUNT
+        },
+        storage: {
+            type: accountStore.kind,
+            persistent: accountStore.persistent
+        }
+    };
+}
+
+// Billing добавляется после чтения общего поискового кэша, поэтому баланс одного
+// пользователя никогда не сохраняется в результате и не попадает другому пользователю.
+function withDeepSearchBilling(result, user, details) {
+    return {
+        ...result,
+        billing: {
+            costCredits: DEEP_SEARCH_CREDIT_COST,
+            chargedCredits: details.chargedCredits,
+            balance: user.credits,
+            cacheHit: Boolean(details.cacheHit),
+            reason: details.reason
+        }
+    };
+}
+
+// Пустой результат тоже может быть корректным, но хотя бы один внешний источник должен
+// успешно ответить. При полном техническом сбое зарезервированный credit возвращается.
+function isBillableDeepSearchResult(result) {
+    return Number((result.sourceStats || {}).successful) > 0;
+}
+
 // Простой fixed-window rate limit: достаточно для локального прототипа и дешевой защиты API.
 // В продакшене эту Map лучше заменить на Redis, чтобы лимиты работали между несколькими серверами.
 function consumeRateLimit(scope, clientId, options) {
@@ -1834,44 +2153,6 @@ function countryToLanguage(country) {
     };
 
     return map[country] || 'unknown';
-}
-
-// Минимальная загрузка .env для локального запуска без зависимости dotenv.
-// Уже заданные переменные окружения не перезаписываем, чтобы deploy-настройки были главнее.
-function loadEnvFile(filePath) {
-    if (!fsSync.existsSync(filePath)) return;
-
-    const envText = fsSync.readFileSync(filePath, 'utf8');
-
-    for (const line of envText.split(/\r?\n/)) {
-        const trimmedLine = line.trim();
-        if (!trimmedLine || trimmedLine.startsWith('#')) continue;
-
-        const separatorIndex = trimmedLine.indexOf('=');
-        if (separatorIndex === -1) continue;
-
-        const key = trimmedLine.slice(0, separatorIndex).trim();
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || process.env[key] !== undefined) {
-            continue;
-        }
-
-        const value = trimmedLine.slice(separatorIndex + 1).trim();
-        process.env[key] = stripEnvQuotes(value);
-    }
-}
-
-// Позволяет писать в .env значения в кавычках: KEY="value" или KEY='value'.
-function stripEnvQuotes(value) {
-    if (value.length < 2) return value;
-
-    const firstChar = value[0];
-    const lastChar = value[value.length - 1];
-
-    if ((firstChar === '"' && lastChar === '"') || (firstChar === "'" && lastChar === "'")) {
-        return value.slice(1, -1);
-    }
-
-    return value;
 }
 
 function sendJson(res, statusCode, data, extraHeaders = {}) {

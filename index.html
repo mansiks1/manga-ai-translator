@@ -11,13 +11,29 @@
 <body>
     <main id="container">
         <h1>Manga Search AI</h1>
+
+        <!--
+        ЛОКАЛЬНЫЙ БАЛАНС
+        Backend создает временного пользователя по HttpOnly cookie. После подключения
+        настоящих аккаунтов этот блок сможет использовать тот же ответ /api/me.
+        -->
+        <section id="accountBar" class="account-bar" aria-label="Баланс аккаунта">
+            <div class="account-balance">
+                <span>Кредиты</span>
+                <strong id="creditBalance">...</strong>
+                <span id="deepSearchPrice" class="deep-search-price"></span>
+            </div>
+            <button id="addCreditsButton" class="dev-credit-button" type="button" hidden></button>
+            <span id="creditActivity" class="credit-activity" aria-live="polite"></span>
+        </section>
+
         <!-- 
         БЛОК ПОИСКА
          -->
         <div id="searchbox">
             <input type="text" id="searchInput" placeholder="Введите название манги">
             <button id="searchButton" class="search-action" type="button">Найти</button>
-            <button id="deepSearchButton" class="search-action secondary" type="button">Глубокий поиск</button>
+            <button id="deepSearchButton" class="search-action secondary" type="button" disabled>Глубокий поиск</button>
         </div>
 
         <!--

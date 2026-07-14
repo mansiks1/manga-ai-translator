@@ -2,6 +2,22 @@
 
 The site should not store a money balance. Store internal credits instead.
 
+## Current Storage Layer
+
+The Node backend uses one account-store contract with two implementations:
+
+- Without `DATABASE_URL`: in-memory users and ledger for local development.
+- With `DATABASE_URL`: PostgreSQL users, hashed sessions, balances, and ledger entries.
+
+- `GET /api/me` creates or restores a local HttpOnly cookie session.
+- `POST /api/dev/add-credits` adds a fixed test amount outside production.
+- A successful deep-search cache miss costs 1 credit.
+- Cache hits and shared in-flight requests cost 0 credits.
+- A reserved credit is refunded when every external source fails.
+- Credit updates are atomic and idempotent in both storage modes.
+
+PostgreSQL now provides persistence, but browser sessions are still anonymous. Registration, login, payment webhooks, and account recovery remain required before accepting payments.
+
 ## Product Rules
 
 - Normal search is free.
@@ -48,4 +64,3 @@ Never trust frontend payment state. Credits should be granted only from a verifi
 - Never allow negative credit balance.
 - Do not charge for failed AI/provider calls.
 - Do not charge again for fresh cache hits.
-

@@ -47,9 +47,10 @@ Python FastAPI worker
 5. Add paid deep search behind account credits.
 6. Add a Python OCR/translation worker only when chapter image processing starts.
 
+Current progress: the optional PostgreSQL account store, hashed sessions, atomic credit ledger, and SQL migration are implemented. Real registration and payment webhooks are the next backend milestone.
+
 ## Why Not Rewrite Everything Now
 
 The current backend already owns the hardest search logic: source adapters, merging, ranking, deep search, AI query generation, cache, and rate limits. Rewriting that before payments and translation exist would add risk without giving users a better product.
 
 Next.js should be introduced for the user-facing app and account flows. FastAPI should be introduced later for Python-heavy OCR and translation jobs.
-

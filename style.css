@@ -11,6 +11,58 @@
     text-align: center;
 }
 
+.account-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 0 auto 18px;
+    padding: 10px 0;
+    border-top: 1px solid #d8dee6;
+    border-bottom: 1px solid #d8dee6;
+    color: #52606d;
+    font-size: 14px;
+}
+
+.account-balance {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    flex-wrap: wrap;
+}
+
+#creditBalance {
+    color: #1f2933;
+    font-size: 18px;
+}
+
+.deep-search-price {
+    padding-left: 12px;
+    border-left: 1px solid #c8d0d9;
+}
+
+.dev-credit-button {
+    padding: 7px 11px;
+    border: 1px solid #1f6feb;
+    border-radius: 6px;
+    background: white;
+    color: #1f6feb;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.dev-credit-button:hover {
+    background: #edf5ff;
+}
+
+.credit-activity {
+    flex-basis: 100%;
+    min-height: 18px;
+    color: #52606d;
+    text-align: center;
+}
+
 #searchbox {
     display: flex;
     justify-content: center;
@@ -53,8 +105,11 @@
 }
 
 .search-action:disabled,
+.language-option:disabled,
+.dev-credit-button:disabled,
 .manga-actions button:disabled {
     background: #9aa6b2;
+    color: white;
     cursor: not-allowed;
 }
 
@@ -236,6 +291,18 @@
 }
 
 @media (max-width: 560px) {
+    #container {
+        margin-top: 28px;
+    }
+
+    .account-bar {
+        justify-content: flex-start;
+    }
+
+    .credit-activity {
+        text-align: left;
+    }
+
     #searchbox {
         flex-direction: column;
     }
