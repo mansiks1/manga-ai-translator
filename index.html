@@ -13,11 +13,16 @@
         <h1>Manga Search AI</h1>
 
         <!--
-        ЛОКАЛЬНЫЙ БАЛАНС
-        Backend создает временного пользователя по HttpOnly cookie. После подключения
-        настоящих аккаунтов этот блок сможет использовать тот же ответ /api/me.
+        АККАУНТ И БАЛАНС
+        Backend создает анонимного пользователя по HttpOnly cookie, а регистрация
+        привязывает к нему email и пароль без потери накопленных credits.
         -->
         <section id="accountBar" class="account-bar" aria-label="Баланс аккаунта">
+            <div class="account-identity">
+                <span id="accountIdentity">Гость</span>
+                <button id="openAuthButton" class="account-command" type="button">Войти</button>
+                <button id="logoutButton" class="account-command" type="button" hidden>Выйти</button>
+            </div>
             <div class="account-balance">
                 <span>Кредиты</span>
                 <strong id="creditBalance">...</strong>
@@ -60,6 +65,39 @@
             <div id="resultslist" class="resultslist"></div>
         </section>
     </main>
+
+    <dialog id="authDialog" class="auth-dialog" aria-labelledby="authTitle">
+        <div class="auth-dialog-header">
+            <h2 id="authTitle">Вход</h2>
+            <button id="closeAuthButton" class="icon-button" type="button" aria-label="Закрыть" title="Закрыть">×</button>
+        </div>
+
+        <div class="auth-mode" role="tablist" aria-label="Режим авторизации">
+            <button id="loginModeButton" class="auth-mode-button active" type="button" role="tab" aria-selected="true">
+                Вход
+            </button>
+            <button id="registerModeButton" class="auth-mode-button" type="button" role="tab" aria-selected="false">
+                Регистрация
+            </button>
+        </div>
+
+        <form id="authForm" class="auth-form">
+            <label for="authEmail">Email</label>
+            <input id="authEmail" name="email" type="email" autocomplete="email" maxlength="254" required>
+
+            <label for="authPassword">Пароль</label>
+            <input id="authPassword" name="password" type="password" autocomplete="current-password"
+                minlength="15" maxlength="128" required>
+            <span id="passwordHint" class="password-hint" hidden>Минимум 15 символов</span>
+
+            <label id="authPasswordConfirmLabel" for="authPasswordConfirm" hidden>Повтори пароль</label>
+            <input id="authPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password"
+                minlength="15" maxlength="128" hidden>
+
+            <p id="authError" class="auth-error" aria-live="polite"></p>
+            <button id="authSubmitButton" class="auth-submit" type="submit">Войти</button>
+        </form>
+    </dialog>
 
     <script src="script.js"></script>
 </body>

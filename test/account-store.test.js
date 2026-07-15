@@ -1,7 +1,11 @@
 const crypto = require('node:crypto');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { InsufficientCreditsError, MemoryAccountStore } = require('../lib/account-store');
+const {
+    AccountConflictError,
+    InsufficientCreditsError,
+    MemoryAccountStore
+} = require('../lib/account-store');
 
 // Создает независимого пользователя для каждого теста и возвращает его вместе с store.
 async function createTestAccount(initialCredits = 1) {
@@ -53,4 +57,50 @@ test('never allows concurrent charges to make a balance negative', async () => {
 
     const currentUser = store.users.get(user.id);
     assert.equal(currentUser.credits, 0);
+});
+
+test('registers the anonymous user without losing credits', async () => {
+    const { store, user } = await createTestAccount(7);
+    const registeredUser = await store.registerUser(
+        user.id,
+        'Reader@Example.com',
+        'stored-password-hash'
+    );
+    const authUser = await store.findAuthUserByEmail('reader@example.com');
+
+    assert.equal(registeredUser.id, user.id);
+    assert.equal(registeredUser.credits, 7);
+    assert.equal(registeredUser.email, 'reader@example.com');
+    assert.equal(authUser.passwordHash, 'stored-password-hash');
+});
+
+test('prevents duplicate case-insensitive email registrations', async () => {
+    const first = await createTestAccount();
+    const secondUser = await first.store.createSessionUser({
+        userId: crypto.randomUUID(),
+        sessionHash: crypto.randomBytes(32).toString('hex'),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        initialCredits: 0
+    });
+
+    await first.store.registerUser(first.user.id, 'reader@example.com', 'hash-one');
+    await assert.rejects(
+        first.store.registerUser(secondUser.id, 'READER@example.com', 'hash-two'),
+        error => error instanceof AccountConflictError && error.code === 'EMAIL_IN_USE'
+    );
+});
+
+test('creates and revokes a rotated session', async () => {
+    const { store, sessionHash, user } = await createTestAccount();
+    const rotatedHash = crypto.randomBytes(32).toString('hex');
+
+    await store.createSessionForUser({
+        userId: user.id,
+        sessionHash: rotatedHash,
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.deleteSession(sessionHash);
+
+    assert.equal(await store.findUserBySession(sessionHash), null);
+    assert.equal((await store.findUserBySession(rotatedHash)).id, user.id);
 });

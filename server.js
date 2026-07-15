@@ -2,8 +2,19 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { createAccountStore, InsufficientCreditsError } = require('./lib/account-store');
+const {
+    AccountConflictError,
+    createAccountStore,
+    InsufficientCreditsError
+} = require('./lib/account-store');
 const { loadEnvFile } = require('./lib/env');
+const {
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    hashPassword,
+    validatePassword,
+    verifyPassword
+} = require('./lib/passwords');
 
 const PUBLIC_DIR = __dirname;
 
@@ -35,6 +46,10 @@ const DEEP_SEARCH_RATE_LIMIT_WINDOW_MS = Number(process.env.DEEP_SEARCH_RATE_LIM
 const DEEP_SEARCH_RATE_LIMIT_MAX = Number(process.env.DEEP_SEARCH_RATE_LIMIT_MAX) || 8;
 const AI_SEARCH_RATE_LIMIT_WINDOW_MS = Number(process.env.AI_SEARCH_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
 const AI_SEARCH_RATE_LIMIT_MAX = Number(process.env.AI_SEARCH_RATE_LIMIT_MAX) || 4;
+const AUTH_RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS) || 10 * 60 * 1000;
+const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX) || 10;
+const AUTH_REQUEST_BODY_LIMIT_BYTES = 16 * 1024;
+const EMAIL_MAX_LENGTH = 254;
 const INITIAL_USER_CREDITS = process.env.NODE_ENV === 'production'
     ? 0
     : getEnvInteger(process.env.INITIAL_USER_CREDITS, 3, { min: 0 });
@@ -112,6 +127,21 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        if (requestUrl.pathname === '/api/auth/register') {
+            await handleRegisterRequest(req, res);
+            return;
+        }
+
+        if (requestUrl.pathname === '/api/auth/login') {
+            await handleLoginRequest(req, res);
+            return;
+        }
+
+        if (requestUrl.pathname === '/api/auth/logout') {
+            await handleLogoutRequest(req, res);
+            return;
+        }
+
         if (requestUrl.pathname === '/api/dev/add-credits') {
             await handleDevAddCreditsRequest(req, res);
             return;
@@ -166,6 +196,84 @@ async function handleMeRequest(req, res) {
 
     const user = await getOrCreateSessionUser(req, res);
     sendJson(res, 200, getAccountPayload(user));
+}
+
+// API endpoint: POST /api/auth/register
+// Добавляет email и пароль текущему анонимному пользователю, сохраняя его баланс,
+// а затем меняет session token для защиты от фиксации сессии.
+async function handleRegisterRequest(req, res) {
+    if (!ensurePostMethod(req, res)) return;
+    if (!consumeAuthAttempt(req, res, 'register')) return;
+
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+
+    const credentials = validateCredentials(body);
+    if (!credentials.valid) {
+        sendJson(res, 400, { error: credentials.error });
+        return;
+    }
+
+    let user = await getOrCreateSessionUser(req, res);
+    const passwordHash = await hashPassword(credentials.password);
+
+    try {
+        user = await accountStore.registerUser(user.id, credentials.email, passwordHash);
+    } catch (error) {
+        if (error instanceof AccountConflictError) {
+            const message = error.code === 'EMAIL_IN_USE'
+                ? 'An account with this email already exists'
+                : 'This account is already registered';
+            sendJson(res, 409, { error: message, code: error.code });
+            return;
+        }
+        throw error;
+    }
+
+    user = await rotateSession(req, res, user.id);
+    sendJson(res, 201, getAccountPayload(user));
+}
+
+// API endpoint: POST /api/auth/login
+// Всегда выполняет scrypt-проверку и возвращает одну ошибку для неизвестного email
+// и неверного пароля, чтобы ответ API не позволял перебирать зарегистрированные адреса.
+async function handleLoginRequest(req, res) {
+    if (!ensurePostMethod(req, res)) return;
+    if (!consumeAuthAttempt(req, res, 'login')) return;
+
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+
+    const credentials = validateCredentials(body);
+    if (!credentials.valid) {
+        sendJson(res, 400, { error: credentials.error });
+        return;
+    }
+
+    const authUser = await accountStore.findAuthUserByEmail(credentials.email);
+    const passwordMatches = await verifyPassword(credentials.password, authUser?.passwordHash);
+    if (!authUser || !passwordMatches) {
+        sendJson(res, 401, { error: 'Invalid email or password' });
+        return;
+    }
+
+    const user = await rotateSession(req, res, authUser.id);
+    sendJson(res, 200, getAccountPayload(user));
+}
+
+// API endpoint: POST /api/auth/logout
+// Отзывает токен на сервере и удаляет cookie. Новая анонимная сессия будет создана
+// только при следующем /api/me, поэтому logout сам не выдает стартовые credits.
+async function handleLogoutRequest(req, res) {
+    if (!ensurePostMethod(req, res)) return;
+
+    const sessionToken = getRequestSessionToken(req);
+    if (sessionToken) {
+        await accountStore.deleteSession(hashSessionToken(sessionToken));
+    }
+
+    clearSessionCookie(req, res);
+    sendJson(res, 200, { ok: true });
 }
 
 // API endpoint: POST /api/dev/add-credits
@@ -1780,6 +1888,98 @@ function getClientId(req) {
     return forwardedIp || req.socket.remoteAddress || 'anonymous';
 }
 
+// Авторизация принимает только POST, чтобы email и пароль не попадали в URL,
+// историю браузера и access logs прокси-сервера.
+function ensurePostMethod(req, res) {
+    if (req.method === 'POST') return true;
+
+    sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'POST' });
+    return false;
+}
+
+// Ограничивает попытки входа и регистрации отдельно от платного deep search.
+// В production эту локальную Map нужно заменить общим Redis rate limiter.
+function consumeAuthAttempt(req, res, action) {
+    const limit = consumeRateLimit(`auth-${action}`, getClientId(req), {
+        limit: AUTH_RATE_LIMIT_MAX,
+        windowMs: AUTH_RATE_LIMIT_WINDOW_MS
+    });
+    if (limit.allowed) return true;
+
+    sendJson(res, 429, {
+        error: 'Too many authentication attempts',
+        retryAfterSeconds: limit.retryAfterSeconds
+    }, { 'Retry-After': String(limit.retryAfterSeconds) });
+    return false;
+}
+
+// Читает небольшой JSON body без стороннего framework. Лимит не дает одному
+// запросу занять память сервера большим телом, а Content-Type исключает двусмысленный разбор.
+async function readJsonBody(req, res) {
+    const contentType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (contentType !== 'application/json') {
+        sendJson(res, 415, { error: 'Content-Type must be application/json' });
+        return null;
+    }
+
+    const declaredLength = Number(req.headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > AUTH_REQUEST_BODY_LIMIT_BYTES) {
+        sendJson(res, 413, { error: 'Request body is too large' });
+        return null;
+    }
+
+    const chunks = [];
+    let totalLength = 0;
+    let tooLarge = false;
+
+    for await (const chunk of req) {
+        totalLength += chunk.length;
+        if (totalLength > AUTH_REQUEST_BODY_LIMIT_BYTES) {
+            tooLarge = true;
+            continue;
+        }
+        chunks.push(chunk);
+    }
+
+    if (tooLarge) {
+        sendJson(res, 413, { error: 'Request body is too large' });
+        return null;
+    }
+
+    try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            throw new SyntaxError('JSON object is required');
+        }
+        return body;
+    } catch {
+        sendJson(res, 400, { error: 'Request body must contain valid JSON' });
+        return null;
+    }
+}
+
+// Нормализует email, но намеренно не изменяет пароль: пробелы и Unicode могут
+// быть его значимой частью и должны проверяться ровно в том виде, как их ввел пользователь.
+function validateCredentials(body) {
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = body.password;
+
+    if (
+        !email
+        || email.length > EMAIL_MAX_LENGTH
+        || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    ) {
+        return { valid: false, error: 'Enter a valid email address' };
+    }
+
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+        return { valid: false, error: passwordValidation.error };
+    }
+
+    return { valid: true, email, password };
+}
+
 // Возвращает пользователя текущего браузера по случайному токену из HttpOnly cookie.
 // В PostgreSQL и памяти хранится только SHA-256 хэш, а исходный токен остается у браузера.
 async function getOrCreateSessionUser(req, res) {
@@ -1802,6 +2002,30 @@ async function getOrCreateSessionUser(req, res) {
     }
 
     return user;
+}
+
+// После входа или регистрации создает новый случайный токен и только затем отзывает
+// старый. Если создание новой сессии не удалось, пользователь не потеряет текущую.
+async function rotateSession(req, res, userId) {
+    const previousToken = getRequestSessionToken(req);
+    const newSessionToken = crypto.randomBytes(32).toString('base64url');
+    const user = await accountStore.createSessionForUser({
+        userId,
+        sessionHash: hashSessionToken(newSessionToken),
+        expiresAt: new Date(Date.now() + SESSION_COOKIE_MAX_AGE_SECONDS * 1000).toISOString()
+    });
+
+    setSessionCookie(req, res, newSessionToken);
+    if (previousToken) {
+        await accountStore.deleteSession(hashSessionToken(previousToken));
+    }
+
+    return user;
+}
+
+function getRequestSessionToken(req) {
+    const sessionToken = parseCookieHeader(req.headers.cookie)[SESSION_COOKIE_NAME];
+    return isValidSessionToken(sessionToken) ? sessionToken : null;
 }
 
 // Отбрасывает слишком короткие и поврежденные значения до обращения к хранилищу.
@@ -1827,6 +2051,18 @@ function setSessionCookie(req, res, sessionId) {
         'SameSite=Lax',
         `Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}${secureAttribute}`
     ].join('; '));
+}
+
+// Удаляет browser cookie с теми же атрибутами Path/SameSite, с которыми она создавалась.
+function clearSessionCookie(req, res) {
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const isSecure = Boolean(req.socket.encrypted) || forwardedProto === 'https';
+    const secureAttribute = isSecure ? '; Secure' : '';
+
+    res.setHeader(
+        'Set-Cookie',
+        `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureAttribute}`
+    );
 }
 
 // Разбирает стандартный Cookie header в объект и не ломает запрос из-за
@@ -1863,6 +2099,8 @@ function getAccountPayload(user) {
     return {
         user: {
             id: user.id,
+            email: user.email || null,
+            authenticated: Boolean(user.email),
             credits: user.credits,
             createdAt: user.createdAt
         },
@@ -2158,6 +2396,8 @@ function countryToLanguage(country) {
 function sendJson(res, statusCode, data, extraHeaders = {}) {
     res.writeHead(statusCode, {
         'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
         ...extraHeaders
     });
     res.end(JSON.stringify(data));

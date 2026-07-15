@@ -32,6 +32,36 @@
     flex-wrap: wrap;
 }
 
+.account-identity {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+#accountIdentity {
+    max-width: 280px;
+    overflow: hidden;
+    color: #1f2933;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.account-command {
+    padding: 7px 11px;
+    border: 1px solid #c8d0d9;
+    border-radius: 6px;
+    background: white;
+    color: #263241;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.account-command:hover {
+    border-color: #8795a5;
+    background: #f0f3f6;
+}
+
 #creditBalance {
     color: #1f2933;
     font-size: 18px;
@@ -61,6 +91,143 @@
     min-height: 18px;
     color: #52606d;
     text-align: center;
+}
+
+.auth-dialog {
+    width: min(420px, calc(100% - 32px));
+    padding: 0;
+    border: 1px solid #c8d0d9;
+    border-radius: 8px;
+    background: white;
+    color: #1f2933;
+    box-shadow: 0 18px 48px rgb(31 41 51 / 22%);
+}
+
+.auth-dialog::backdrop {
+    background: rgb(31 41 51 / 48%);
+}
+
+.auth-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 20px 12px;
+}
+
+.auth-dialog-header h2 {
+    margin: 0;
+    font-size: 21px;
+}
+
+.icon-button {
+    display: inline-grid;
+    width: 36px;
+    height: 36px;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #52606d;
+    cursor: pointer;
+    font-size: 25px;
+    line-height: 1;
+}
+
+.icon-button:hover {
+    background: #eef2f6;
+    color: #1f2933;
+}
+
+.auth-mode {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    margin: 0 20px;
+    border: 1px solid #c8d0d9;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.auth-mode-button {
+    min-height: 40px;
+    padding: 8px 12px;
+    border: 0;
+    background: #f0f3f6;
+    color: #52606d;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.auth-mode-button + .auth-mode-button {
+    border-left: 1px solid #c8d0d9;
+}
+
+.auth-mode-button.active {
+    background: #263241;
+    color: white;
+}
+
+.auth-form {
+    display: grid;
+    gap: 8px;
+    padding: 18px 20px 22px;
+    text-align: left;
+}
+
+.auth-form label {
+    margin-top: 4px;
+    color: #344054;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.auth-form input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid #b8c2cc;
+    border-radius: 6px;
+    font: inherit;
+}
+
+.auth-form input:focus {
+    border-color: #1f6feb;
+    outline: 2px solid rgb(31 111 235 / 18%);
+}
+
+.password-hint {
+    color: #657481;
+    font-size: 13px;
+}
+
+.auth-error {
+    min-height: 20px;
+    margin: 4px 0 0;
+    color: #b42318;
+    font-size: 14px;
+}
+
+.auth-submit {
+    min-height: 42px;
+    padding: 9px 14px;
+    border: 0;
+    border-radius: 6px;
+    background: #1f6feb;
+    color: white;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.auth-submit:hover {
+    background: #185abc;
+}
+
+.auth-submit:disabled,
+.account-command:disabled {
+    background: #9aa6b2;
+    color: white;
+    cursor: not-allowed;
 }
 
 #searchbox {
@@ -299,6 +466,14 @@
         justify-content: flex-start;
     }
 
+    .account-identity {
+        width: 100%;
+    }
+
+    #accountIdentity {
+        max-width: min(58vw, 280px);
+    }
+
     .credit-activity {
         text-align: left;
     }
@@ -332,5 +507,16 @@
 
     .source-open-link {
         width: fit-content;
+    }
+
+    .auth-dialog-header,
+    .auth-form {
+        padding-right: 16px;
+        padding-left: 16px;
+    }
+
+    .auth-mode {
+        margin-right: 16px;
+        margin-left: 16px;
     }
 }

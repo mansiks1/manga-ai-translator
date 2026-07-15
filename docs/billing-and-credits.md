@@ -10,13 +10,16 @@ The Node backend uses one account-store contract with two implementations:
 - With `DATABASE_URL`: PostgreSQL users, hashed sessions, balances, and ledger entries.
 
 - `GET /api/me` creates or restores a local HttpOnly cookie session.
+- `POST /api/auth/register` upgrades that anonymous user without losing credits.
+- `POST /api/auth/login` verifies a scrypt password hash and rotates the session.
+- `POST /api/auth/logout` revokes the current session server-side.
 - `POST /api/dev/add-credits` adds a fixed test amount outside production.
 - A successful deep-search cache miss costs 1 credit.
 - Cache hits and shared in-flight requests cost 0 credits.
 - A reserved credit is refunded when every external source fails.
 - Credit updates are atomic and idempotent in both storage modes.
 
-PostgreSQL now provides persistence, but browser sessions are still anonymous. Registration, login, payment webhooks, and account recovery remain required before accepting payments.
+PostgreSQL now provides persistent registered accounts. Email verification, password recovery, payment webhooks, origin/CSRF checks, and distributed rate limits remain required before accepting payments.
 
 ## Product Rules
 

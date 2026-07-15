@@ -10,7 +10,7 @@ Local web app for searching manga across multiple sources and preparing AI-assis
 - Latest chapter lookup, primarily through MangaDex.
 - Manga cards with cover, description, sources, best source, and latest chapter.
 - MangaDex chapter buttons for the future AI translation flow.
-- Local cookie session with credits for testing paid deep search.
+- Registration, login, logout, and server-side cookie sessions.
 - Optional PostgreSQL persistence for users, sessions, and the credit ledger.
 - Free cache hits, IP rate limits, and automatic credit refunds on total source failure.
 
@@ -86,9 +86,11 @@ DEEP_SEARCH_QUERY_LIMIT=8
 
 The model only generates search queries. Manga results are still verified through MangaDex, MangaUpdates, AniList, Jikan, and Kitsu.
 
-## Local Credits Prototype
+## Accounts And Local Credits
 
-The browser receives a temporary server-side account through an HttpOnly cookie. Locally it starts with 3 credits, and a successful deep search that was not served from cache costs 1 credit. Use the `Тестово +10` button to test replenishment.
+The browser first receives an anonymous server-side account through an HttpOnly cookie. Registration adds an email and a scrypt password hash to that same user, so its credits are preserved. Login and registration rotate the session token, and logout revokes it server-side.
+
+Locally a new anonymous user starts with 3 credits, and a successful deep search that was not served from cache costs 1 credit. Use the development top-up button to test replenishment.
 
 ```txt
 INITIAL_USER_CREDITS=3
@@ -101,7 +103,7 @@ Without `DATABASE_URL`, the balance and append-only ledger live in memory and re
 
 ## PostgreSQL Storage
 
-Set a PostgreSQL connection string to persist anonymous users, hashed browser sessions, balances, and ledger entries:
+Set a PostgreSQL connection string to persist registered and anonymous users, hashed browser sessions, balances, and ledger entries:
 
 ```txt
 DATABASE_URL=postgresql://postgres:password@localhost:5432/manga_ai_translator
@@ -114,7 +116,14 @@ npm.cmd run db:migrate
 npm.cmd start
 ```
 
-The server checks the schema before opening its port and prints `Account storage: postgres` when persistence is active. Without `DATABASE_URL`, it prints `Account storage: memory`. Registration and login are still required before accepting real payments.
+The server checks the schema before opening its port and prints `Account storage: postgres` when persistence is active. Without `DATABASE_URL`, it prints `Account storage: memory`. Before accepting real payments, add email verification, password recovery, payment webhooks, CSRF/origin checks, and a distributed Redis rate limiter.
+
+Authentication throttling can be adjusted locally:
+
+```txt
+AUTH_RATE_LIMIT_WINDOW_MS=600000
+AUTH_RATE_LIMIT_MAX=10
+```
 
 ## Project Structure
 
@@ -127,6 +136,7 @@ manga-ai-translator/
   lib/
     account-store.js
     env.js
+    passwords.js
   db/migrations/
   scripts/migrate.js
   test/
@@ -161,3 +171,4 @@ See:
 - `docs/production-architecture.md`
 - `docs/billing-and-credits.md`
 - `db/migrations/001_accounts_and_billing.sql`
+- `db/migrations/002_auth_accounts.sql`

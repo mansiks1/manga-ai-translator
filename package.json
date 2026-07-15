@@ -5,8 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check script.js && node --check lib/account-store.js && node --check lib/env.js && node --check scripts/migrate.js",
-    "test": "node --test",
+    "check": "node --check server.js && node --check script.js && node --check lib/account-store.js && node --check lib/passwords.js && node --check lib/env.js && node --check scripts/migrate.js",
+    "test": "node --test --test-concurrency=1",
     "db:migrate": "node scripts/migrate.js"
   },
   "dependencies": {

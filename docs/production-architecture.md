@@ -47,7 +47,7 @@ Python FastAPI worker
 5. Add paid deep search behind account credits.
 6. Add a Python OCR/translation worker only when chapter image processing starts.
 
-Current progress: the optional PostgreSQL account store, hashed sessions, atomic credit ledger, and SQL migration are implemented. Real registration and payment webhooks are the next backend milestone.
+Current progress: the optional PostgreSQL account store, scrypt password hashes, registration/login/logout, hashed and rotated sessions, atomic credit ledger, and SQL migrations are implemented. Email verification, password recovery, payment webhooks, and Redis-backed limits are the next backend milestones.
 
 ## Why Not Rewrite Everything Now
 

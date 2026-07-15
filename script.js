@@ -6,6 +6,22 @@ const creditBalance = document.getElementById('creditBalance');
 const deepSearchPrice = document.getElementById('deepSearchPrice');
 const addCreditsButton = document.getElementById('addCreditsButton');
 const creditActivity = document.getElementById('creditActivity');
+const accountIdentity = document.getElementById('accountIdentity');
+const openAuthButton = document.getElementById('openAuthButton');
+const logoutButton = document.getElementById('logoutButton');
+const authDialog = document.getElementById('authDialog');
+const authTitle = document.getElementById('authTitle');
+const closeAuthButton = document.getElementById('closeAuthButton');
+const loginModeButton = document.getElementById('loginModeButton');
+const registerModeButton = document.getElementById('registerModeButton');
+const authForm = document.getElementById('authForm');
+const authEmail = document.getElementById('authEmail');
+const authPassword = document.getElementById('authPassword');
+const authPasswordConfirmLabel = document.getElementById('authPasswordConfirmLabel');
+const authPasswordConfirm = document.getElementById('authPasswordConfirm');
+const passwordHint = document.getElementById('passwordHint');
+const authError = document.getElementById('authError');
+const authSubmitButton = document.getElementById('authSubmitButton');
 
 // Предпочтительный язык перевода.
 // Сейчас влияет на последнюю главу MangaDex, позже будет использоваться для ИИ-перевода.
@@ -16,6 +32,7 @@ let accountState = null;
 // одновременных первых запроса могли бы создать для одного браузера разные сессии.
 let accountReady = false;
 let searchInProgress = false;
+let authMode = 'login';
 
 // ПОИСК МАНГИ
 // Обычный поиск быстро обращается к backend и ищет по введенному названию.
@@ -126,9 +143,14 @@ function renderAccountState(data) {
     accountReady = true;
 
     const credits = Number((data.user || {}).credits);
+    const user = data.user || {};
     const deepSearchCost = Number((data.pricing || {}).deepSearchCredits);
     const devTopUp = data.devTopUp || {};
 
+    accountIdentity.textContent = user.authenticated ? user.email : 'Гость';
+    accountIdentity.title = user.authenticated ? user.email : '';
+    openAuthButton.hidden = Boolean(user.authenticated);
+    logoutButton.hidden = !user.authenticated;
     creditBalance.textContent = Number.isFinite(credits) ? String(credits) : '0';
     deepSearchPrice.textContent = Number.isFinite(deepSearchCost)
         ? `Глубокий поиск: ${deepSearchCost}`
@@ -163,6 +185,132 @@ async function addDevelopmentCredits() {
     } finally {
         addCreditsButton.disabled = false;
     }
+}
+
+// Открывает одну общую форму в нужном режиме. Нативный dialog удерживает фокус
+// внутри окна и поддерживает закрытие клавишей Escape без отдельной библиотеки.
+function openAuthDialog(mode = 'login') {
+    setAuthMode(mode);
+    authError.textContent = '';
+    authForm.reset();
+    authDialog.showModal();
+    authEmail.focus();
+}
+
+// Переключает подписи, autocomplete и доступные подсказки между входом и регистрацией.
+function setAuthMode(mode) {
+    authMode = mode === 'register' ? 'register' : 'login';
+    const isRegistration = authMode === 'register';
+
+    authTitle.textContent = isRegistration ? 'Регистрация' : 'Вход';
+    authSubmitButton.textContent = isRegistration ? 'Создать аккаунт' : 'Войти';
+    authPassword.autocomplete = isRegistration ? 'new-password' : 'current-password';
+    passwordHint.hidden = !isRegistration;
+    authPasswordConfirmLabel.hidden = !isRegistration;
+    authPasswordConfirm.hidden = !isRegistration;
+    authPasswordConfirm.required = isRegistration;
+    if (!isRegistration) authPasswordConfirm.value = '';
+    authError.textContent = '';
+
+    loginModeButton.classList.toggle('active', !isRegistration);
+    loginModeButton.setAttribute('aria-selected', String(!isRegistration));
+    registerModeButton.classList.toggle('active', isRegistration);
+    registerModeButton.setAttribute('aria-selected', String(isRegistration));
+}
+
+// Отправляет только JSON с email и паролем. Успешный ответ уже содержит новый
+// баланс и состояние аккаунта, поэтому дополнительный запрос /api/me не нужен.
+async function submitAuthForm(event) {
+    event.preventDefault();
+    if (!authForm.reportValidity()) return;
+    if (authMode === 'register' && authPassword.value !== authPasswordConfirm.value) {
+        authError.textContent = 'Пароли не совпадают.';
+        authPasswordConfirm.focus();
+        return;
+    }
+
+    setAuthFormDisabled(true);
+    authError.textContent = '';
+
+    try {
+        const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: authEmail.value.trim(),
+                password: authPassword.value
+            })
+        });
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok || !data) {
+            const error = new Error((data && data.error) || 'Authentication failed');
+            error.status = response.status;
+            error.code = data && data.code;
+            error.retryAfterSeconds = data && data.retryAfterSeconds;
+            throw error;
+        }
+
+        renderAccountState(data);
+        authDialog.close();
+        authForm.reset();
+        setCreditActivity(authMode === 'register' ? 'Аккаунт создан.' : 'Вход выполнен.');
+    } catch (error) {
+        console.error(error);
+        authError.textContent = getAuthErrorMessage(error);
+    } finally {
+        setAuthFormDisabled(false);
+    }
+}
+
+// Удаляет текущую серверную сессию, затем получает нового анонимного пользователя
+// тем же способом, которым страница инициализируется при первом открытии.
+async function logoutAccount() {
+    logoutButton.disabled = true;
+    setCreditActivity('Выходим из аккаунта...');
+
+    try {
+        const response = await fetch('/api/auth/logout', { method: 'POST' });
+        if (!response.ok) throw new Error('Logout failed');
+
+        accountReady = false;
+        deepSearchButton.disabled = true;
+        await loadAccountState();
+        setCreditActivity('Вы вышли из аккаунта.');
+    } catch (error) {
+        console.error(error);
+        setCreditActivity('Не получилось выйти из аккаунта.');
+    } finally {
+        logoutButton.disabled = false;
+    }
+}
+
+function setAuthFormDisabled(disabled) {
+    authEmail.disabled = disabled;
+    authPassword.disabled = disabled;
+    authPasswordConfirm.disabled = disabled;
+    authSubmitButton.disabled = disabled;
+    loginModeButton.disabled = disabled;
+    registerModeButton.disabled = disabled;
+    closeAuthButton.disabled = disabled;
+}
+
+function getAuthErrorMessage(error) {
+    if (error.status === 401) return 'Неверный email или пароль.';
+    if (error.code === 'EMAIL_IN_USE') return 'Аккаунт с таким email уже существует.';
+    if (error.code === 'ACCOUNT_ALREADY_REGISTERED') return 'Этот аккаунт уже зарегистрирован.';
+    if (error.status === 429) {
+        const retryText = error.retryAfterSeconds ? ` Повтори через ${error.retryAfterSeconds} сек.` : '';
+        return `Слишком много попыток.${retryText}`;
+    }
+    if (error.status === 400) {
+        if (error.message.includes('at least')) return 'Пароль должен содержать минимум 15 символов.';
+        if (error.message.includes('no more')) return 'Пароль не должен быть длиннее 128 символов.';
+        if (error.message.includes('email')) return 'Введи корректный email.';
+    }
+
+    return 'Не получилось выполнить запрос. Попробуй еще раз.';
 }
 
 // Backend возвращает billing отдельно от общего поискового результата. Так frontend
@@ -738,6 +886,14 @@ deepSearchButton.addEventListener('click', deepSearchManga);
 
 // Тестовое пополнение показывается только когда backend разрешил dev-режим.
 addCreditsButton.addEventListener('click', addDevelopmentCredits);
+
+// Открытие, переключение режима и закрытие формы аккаунта.
+openAuthButton.addEventListener('click', () => openAuthDialog('login'));
+logoutButton.addEventListener('click', logoutAccount);
+closeAuthButton.addEventListener('click', () => authDialog.close());
+loginModeButton.addEventListener('click', () => setAuthMode('login'));
+registerModeButton.addEventListener('click', () => setAuthMode('register'));
+authForm.addEventListener('submit', submitAuthForm);
 
 // Нажатие Enter в поле поиска запускает обычный поиск.
 searchInput.addEventListener('keydown', event => {
