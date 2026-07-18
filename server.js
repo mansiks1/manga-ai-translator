@@ -9,6 +9,11 @@ const {
 } = require('./lib/account-store');
 const { loadEnvFile } = require('./lib/env');
 const {
+    SEARCH_CACHE_SCOPES,
+    getSearchCacheKey,
+    normalizeSearchQuery
+} = require('./lib/search-cache');
+const {
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
     hashPassword,
@@ -113,6 +118,7 @@ const sourceAdapters = [
 const mangaLibChapterInfoCache = new Map();
 const searchResultCache = new Map();
 const deepSearchResultCache = new Map();
+const deepSearchQueryResultCache = new Map();
 const aiSearchPlanCache = new Map();
 const rateLimitBuckets = new Map();
 const deepSearchInFlight = new Map();
@@ -345,7 +351,11 @@ async function handleDeepSearchRequest(requestUrl, req, res) {
 
     let user = await getOrCreateSessionUser(req, res);
     const clientId = getClientId(req);
-    const cacheKey = getSearchCacheKey('deep', query, preferredLanguage);
+    const cacheKey = getSearchCacheKey(
+        SEARCH_CACHE_SCOPES.DEEP_RESULT,
+        query,
+        preferredLanguage
+    );
     const cachedResult = getCacheValue(deepSearchResultCache, cacheKey);
     if (cachedResult) {
         sendJson(res, 200, withDeepSearchBilling(
@@ -507,11 +517,15 @@ async function serveStaticFile(pathname, res) {
 // ОБЫЧНЫЙ ПОИСК
 // Параллельно опрашивает все источники, не падает полностью, если один сайт вернул ошибку,
 // затем объединяет одинаковые тайтлы и выбирает лучший источник для каждой манги.
-async function searchAllSources(query, preferredLanguage) {
-    const cacheKey = getSearchCacheKey('search', query, preferredLanguage);
-    const cachedResult = getCacheValue(searchResultCache, cacheKey);
+async function searchAllSources(query, preferredLanguage, options = {}) {
+    const resultCache = options.resultCache || searchResultCache;
+    const cacheScope = options.cacheScope || SEARCH_CACHE_SCOPES.NORMAL_RESULT;
+    const cacheFlag = options.cacheFlag || 'search';
+    const cacheTtlMs = options.cacheTtlMs || SEARCH_CACHE_TTL_MS;
+    const cacheKey = getSearchCacheKey(cacheScope, query, preferredLanguage);
+    const cachedResult = getCacheValue(resultCache, cacheKey);
     if (cachedResult) {
-        return markCacheHit(cachedResult, 'search');
+        return markCacheHit(cachedResult, cacheFlag);
     }
 
     const settled = await Promise.all(sourceAdapters.map(async adapter => {
@@ -543,10 +557,10 @@ async function searchAllSources(query, preferredLanguage) {
             successful: successfulSourceRequests,
             failed: settled.length - successfulSourceRequests
         },
-        cache: { search: false }
+        cache: { [cacheFlag]: false }
     };
 
-    setCacheValue(searchResultCache, cacheKey, result, SEARCH_CACHE_TTL_MS);
+    setCacheValue(resultCache, cacheKey, result, cacheTtlMs);
     return cloneJson(result);
 }
 
@@ -1124,7 +1138,12 @@ function getSearchWordCount(value) {
 
 function searchDeepQueries(queries, preferredLanguage) {
     return Promise.all(
-        queries.map(deepQuery => searchAllSources(deepQuery, preferredLanguage))
+        queries.map(deepQuery => searchAllSources(deepQuery, preferredLanguage, {
+            resultCache: deepSearchQueryResultCache,
+            cacheScope: SEARCH_CACHE_SCOPES.DEEP_SOURCE_QUERY,
+            cacheFlag: 'deepQuery',
+            cacheTtlMs: DEEP_SEARCH_CACHE_TTL_MS
+        }))
     );
 }
 
@@ -1147,7 +1166,11 @@ function getInitialAiSearchState() {
 // Собирает AI-варианты глубокого поиска для каждого глубокого запроса.
 // Даже если локальные источники что-то нашли, это может быть нерелевантный шум.
 async function getAiDeepSearchPlan(query, preferredLanguage, options = {}) {
-    const cacheKey = getSearchCacheKey('ai-plan', query, preferredLanguage);
+    const cacheKey = getSearchCacheKey(
+        SEARCH_CACHE_SCOPES.AI_PLAN,
+        query,
+        preferredLanguage
+    );
     const cachedPlan = getCacheValue(aiSearchPlanCache, cacheKey);
     if (cachedPlan) {
         cachedPlan.aiSearch = {
@@ -2182,14 +2205,6 @@ function pruneRateLimitBuckets(now) {
     }
 }
 
-function getSearchCacheKey(scope, query, preferredLanguage) {
-    return [
-        scope,
-        preferredLanguage || 'all',
-        normalizeSearchQuery(query).toLowerCase()
-    ].join(':');
-}
-
 // Кладем в кэш копии объектов, чтобы последующие изменения результата не меняли сохраненное значение.
 function setCacheValue(cache, key, value, ttlMs) {
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
@@ -2245,14 +2260,6 @@ function markCacheHit(result, cacheName) {
 
 function cloneJson(value) {
     return JSON.parse(JSON.stringify(value));
-}
-
-// Приводит поисковую строку к компактному виду перед отправкой во внешние API.
-function normalizeSearchQuery(value) {
-    return String(value || '')
-        .replace(/\s+/g, ' ')
-        .replace(/^["'`]+|["'`]+$/g, '')
-        .trim();
 }
 
 function normalizeTitle(title) {
