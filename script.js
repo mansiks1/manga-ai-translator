@@ -9,6 +9,7 @@ const creditActivity = document.getElementById('creditActivity');
 const accountIdentity = document.getElementById('accountIdentity');
 const openAuthButton = document.getElementById('openAuthButton');
 const logoutButton = document.getElementById('logoutButton');
+const buyCreditsButton = document.getElementById('buyCreditsButton');
 const authDialog = document.getElementById('authDialog');
 const authTitle = document.getElementById('authTitle');
 const closeAuthButton = document.getElementById('closeAuthButton');
@@ -22,6 +23,10 @@ const authPasswordConfirm = document.getElementById('authPasswordConfirm');
 const passwordHint = document.getElementById('passwordHint');
 const authError = document.getElementById('authError');
 const authSubmitButton = document.getElementById('authSubmitButton');
+const creditsDialog = document.getElementById('creditsDialog');
+const closeCreditsButton = document.getElementById('closeCreditsButton');
+const creditPlans = document.getElementById('creditPlans');
+const creditPurchaseStatus = document.getElementById('creditPurchaseStatus');
 
 // Предпочтительный язык перевода.
 // Сейчас влияет на последнюю главу MangaDex, позже будет использоваться для ИИ-перевода.
@@ -33,6 +38,7 @@ let accountState = null;
 let accountReady = false;
 let searchInProgress = false;
 let authMode = 'login';
+let billingPlansLoaded = false;
 
 // ПОИСК МАНГИ
 // Обычный поиск быстро обращается к backend и ищет по введенному названию.
@@ -185,6 +191,95 @@ async function addDevelopmentCredits() {
     } finally {
         addCreditsButton.disabled = false;
     }
+}
+
+// Открывает окно покупки и при первом открытии получает цены с backend. Повторные
+// открытия используют уже отрисованный каталог и не создают лишних запросов.
+async function openCreditsDialog() {
+    creditPurchaseStatus.textContent = '';
+    creditsDialog.showModal();
+
+    if (!billingPlansLoaded) {
+        await loadBillingPlans();
+    }
+}
+
+// Загружает серверный каталог тарифов. Клиент использует цены только для вывода:
+// будущий платеж будет создаваться backend исключительно по id выбранного тарифа.
+async function loadBillingPlans() {
+    creditPlans.innerHTML = '<p class="credit-plans-loading">Загружаем тарифы...</p>';
+
+    try {
+        const response = await fetch('/api/billing/plans');
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data || !Array.isArray(data.plans)) {
+            throw new Error((data && data.error) || 'Billing plans request failed');
+        }
+
+        renderBillingPlans(data.plans, Boolean(data.paymentsEnabled));
+        billingPlansLoaded = true;
+    } catch (error) {
+        console.error(error);
+        creditPlans.innerHTML = '<p class="credit-plans-loading">Не получилось загрузить тарифы.</p>';
+    }
+}
+
+// Создает карточки тарифов безопасными DOM-методами и передает дальше только id
+// выбранного плана. featured влияет лишь на визуальное выделение тарифа.
+function renderBillingPlans(plans, paymentsEnabled) {
+    const fragment = document.createDocumentFragment();
+    creditPlans.replaceChildren();
+
+    plans.forEach(plan => {
+        const card = document.createElement('article');
+        card.className = 'credit-plan';
+        if (plan.featured) card.classList.add('featured');
+
+        const heading = document.createElement('h3');
+        heading.textContent = `${plan.credits} кредитов`;
+
+        const price = document.createElement('strong');
+        price.className = 'credit-plan-price';
+        price.textContent = formatPlanPrice(plan.amountMinor, plan.currency);
+
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.textContent = 'Выбрать';
+        action.addEventListener('click', () => selectBillingPlan(plan, paymentsEnabled));
+
+        card.append(heading, price, action);
+        fragment.append(card);
+    });
+
+    creditPlans.append(fragment);
+}
+
+// Форматирует целое число копеек для показа без использования дробной арифметики
+// в данных тарифа. Для неизвестной валюты сохраняет ее буквенный код.
+function formatPlanPrice(amountMinor, currency) {
+    const amount = Number(amountMinor) / 100;
+    if (!Number.isFinite(amount)) return 'Цена недоступна';
+
+    try {
+        return new Intl.NumberFormat('ru-RU', {
+            style: 'currency',
+            currency: currency || 'RUB',
+            maximumFractionDigits: 0
+        }).format(amount);
+    } catch {
+        return `${amount} ${currency || 'RUB'}`;
+    }
+}
+
+// Пока касса не подключена, выбор тарифа только демонстрирует будущий сценарий.
+// После интеграции здесь появится переход на confirmation_url от платежного API.
+function selectBillingPlan(plan, paymentsEnabled) {
+    if (!paymentsEnabled) {
+        creditPurchaseStatus.textContent = `Тариф на ${plan.credits} кредитов выбран. Оплата пока не подключена.`;
+        return;
+    }
+
+    creditPurchaseStatus.textContent = 'Подготавливаем оплату...';
 }
 
 // Открывает одну общую форму в нужном режиме. Нативный dialog удерживает фокус
@@ -894,6 +989,10 @@ closeAuthButton.addEventListener('click', () => authDialog.close());
 loginModeButton.addEventListener('click', () => setAuthMode('login'));
 registerModeButton.addEventListener('click', () => setAuthMode('register'));
 authForm.addEventListener('submit', submitAuthForm);
+
+// Окно тарифов использует тот же modal-паттерн, что и форма аккаунта.
+buyCreditsButton.addEventListener('click', openCreditsDialog);
+closeCreditsButton.addEventListener('click', () => creditsDialog.close());
 
 // Нажатие Enter в поле поиска запускает обычный поиск.
 searchInput.addEventListener('keydown', event => {

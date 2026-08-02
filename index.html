@@ -28,6 +28,9 @@
                 <strong id="creditBalance">...</strong>
                 <span id="deepSearchPrice" class="deep-search-price"></span>
             </div>
+            <button id="buyCreditsButton" class="account-command buy-credits-button" type="button">
+                Купить кредиты
+            </button>
             <button id="addCreditsButton" class="dev-credit-button" type="button" hidden></button>
             <span id="creditActivity" class="credit-activity" aria-live="polite"></span>
         </section>
@@ -97,6 +100,27 @@
             <p id="authError" class="auth-error" aria-live="polite"></p>
             <button id="authSubmitButton" class="auth-submit" type="submit">Войти</button>
         </form>
+    </dialog>
+
+    <!--
+    ПОКУПКА КРЕДИТОВ
+    Цены загружаются с backend. Пока платежный провайдер не подключен, выбор
+    тарифа ничего не списывает и не меняет баланс пользователя.
+    -->
+    <dialog id="creditsDialog" class="auth-dialog credits-dialog" aria-labelledby="creditsTitle">
+        <div class="auth-dialog-header">
+            <h2 id="creditsTitle">Купить кредиты</h2>
+            <button id="closeCreditsButton" class="icon-button" type="button" aria-label="Закрыть"
+                title="Закрыть">×</button>
+        </div>
+
+        <div class="credits-dialog-body">
+            <p class="credits-description">Кредиты используются для глубокого поиска. Цены пока тестовые.</p>
+            <div id="creditPlans" class="credit-plans" aria-live="polite">
+                <p class="credit-plans-loading">Загружаем тарифы...</p>
+            </div>
+            <p id="creditPurchaseStatus" class="credit-purchase-status" aria-live="polite"></p>
+        </div>
     </dialog>
 
     <script src="script.js"></script>

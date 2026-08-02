@@ -62,6 +62,13 @@ const DEEP_SEARCH_CREDIT_COST = getEnvInteger(process.env.DEEP_SEARCH_CREDIT_COS
 const DEV_CREDIT_TOP_UP_AMOUNT = getEnvInteger(process.env.DEV_CREDIT_TOP_UP_AMOUNT, 10, { min: 1, max: 1000 });
 const DEV_CREDIT_TOP_UP_ENABLED = process.env.NODE_ENV !== 'production'
     && parseEnvBoolean(process.env.DEV_CREDIT_TOP_UP_ENABLED, true);
+// Тестовый каталог хранится на backend, чтобы при подключении платежей клиент
+// выбирал только id тарифа и не мог самостоятельно подменить сумму или credits.
+const CREDIT_PLANS = Object.freeze([
+    Object.freeze({ id: 'credits_100', credits: 100, amountMinor: 9900, currency: 'RUB' }),
+    Object.freeze({ id: 'credits_300', credits: 300, amountMinor: 24900, currency: 'RUB', featured: true }),
+    Object.freeze({ id: 'credits_1000', credits: 1000, amountMinor: 69900, currency: 'RUB' })
+]);
 const SESSION_COOKIE_NAME = 'manga_session';
 const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const DATABASE_URL = process.env.DATABASE_URL || '';
@@ -153,6 +160,11 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        if (requestUrl.pathname === '/api/billing/plans') {
+            handleBillingPlansRequest(req, res);
+            return;
+        }
+
         if (requestUrl.pathname === '/api/search') {
             await handleSearchRequest(requestUrl, req, res);
             return;
@@ -202,6 +214,21 @@ async function handleMeRequest(req, res) {
 
     const user = await getOrCreateSessionUser(req, res);
     sendJson(res, 200, getAccountPayload(user));
+}
+
+// API endpoint: GET /api/billing/plans
+// Возвращает только публичные данные тарифов. paymentsEnabled останется false,
+// пока backend не начнет создавать и проверять реальные платежи через провайдера.
+function handleBillingPlansRequest(req, res) {
+    if (req.method !== 'GET') {
+        sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET' });
+        return;
+    }
+
+    sendJson(res, 200, {
+        paymentsEnabled: false,
+        plans: CREDIT_PLANS.map(plan => ({ ...plan }))
+    });
 }
 
 // API endpoint: POST /api/auth/register
